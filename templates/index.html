@@ -322,6 +322,21 @@
         // API base URL
         const API_BASE = window.location.origin;
 
+        // Format timestamp in ET timezone
+        function formatETTime(isoString) {
+            const date = new Date(isoString);
+            return date.toLocaleString('en-US', {
+                timeZone: 'America/New_York',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            }) + ' ET';
+        }
+
         // Load stats on page load
         loadStats();
         loadLatestResults();
@@ -353,7 +368,12 @@
                     
                     if (data.stats.latest_analysis) {
                         const date = new Date(data.stats.latest_analysis);
-                        document.getElementById('lastUpdate').textContent = date.toLocaleTimeString();
+                        document.getElementById('lastUpdate').textContent = date.toLocaleTimeString('en-US', {
+                            timeZone: 'America/New_York',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: true
+                        }) + ' ET';
                     }
                 }
             } catch (error) {
@@ -478,7 +498,7 @@
                     </div>
                     
                     <div class="timestamp">
-                        ${new Date(result.timestamp).toLocaleString()}
+                        ${formatETTime(result.timestamp)}
                     </div>
                 `;
                 
@@ -502,7 +522,7 @@
                     <span class="alert-ticker">${alert.ticker}</span>
                     <span> - Score: ${alert.score.toFixed(0)} (${alert.category})</span>
                     <span> | News: ${alert.news_direction} ${alert.news_confidence.toFixed(0)}%</span>
-                    <span> | ${new Date(alert.timestamp).toLocaleString()}</span>
+                    <span> | ${formatETTime(alert.timestamp)}</span>
                 `;
                 list.appendChild(item);
             });

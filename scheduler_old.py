@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Timezone-aware scheduler for automated analysis
-Runs every 30 min during market hours (9:30 AM - 4:00 PM ET)
-Works correctly regardless of server timezone
+Scheduler for automated analysis runs
+Runs analysis 3x daily during market hours (9:30 AM, 12 PM, 3:30 PM ET)
 """
 
+import schedule
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 from typing import Optional
 
@@ -16,59 +16,19 @@ from telegram_bot import TelegramBot
 
 
 class AnalysisScheduler:
-    """Timezone-aware scheduler for running automated analysis"""
+    """Scheduler for running automated analysis"""
     
     def __init__(self, tickers: list = None):
         self.tickers = tickers or ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'TSLA', 'META']
         self.db = Database()
         self.telegram = TelegramBot()
         self.eastern = pytz.timezone('US/Eastern')
-        self.last_run_minute = None
-        
-        # Market hours schedule in ET: every 30 min from 9:30 AM to 4:00 PM
-        self.schedule_times = [
-            (9, 30), (10, 0), (10, 30), (11, 0), (11, 30),
-            (12, 0), (12, 30), (13, 0), (13, 30), (14, 0),
-            (14, 30), (15, 0), (15, 30), (16, 0)
-        ]
-    
-    def get_current_et_time(self):
-        """Get current time in Eastern Time"""
-        return datetime.now(self.eastern)
-    
-    def should_run_now(self):
-        """Check if we should run analysis now based on ET time"""
-        et_now = self.get_current_et_time()
-        
-        # Only run on weekdays
-        if et_now.weekday() >= 5:  # Saturday=5, Sunday=6
-            return False
-        
-        current_hour = et_now.hour
-        current_minute = et_now.minute
-        
-        # Check if current time matches any scheduled time
-        for hour, minute in self.schedule_times:
-            if current_hour == hour and current_minute == minute:
-                # Avoid running multiple times in the same minute
-                current_key = f"{et_now.year}-{et_now.month}-{et_now.day}-{hour}-{minute}"
-                if self.last_run_minute != current_key:
-                    self.last_run_minute = current_key
-                    return True
-        
-        return False
     
     def run_analysis(self, send_alerts: bool = True):
         """Run analysis on all tickers"""
         
-        et_now = self.get_current_et_time()
-        utc_now = datetime.now(pytz.UTC)
-        
         print(f"\n{'='*60}")
-        print(f"🔄 Running scheduled analysis")
-        print(f"   📅 Date: {et_now.strftime('%Y-%m-%d')}")
-        print(f"   🕐 Market Time (ET): {et_now.strftime('%I:%M %p')}")
-        print(f"   🌍 Server Time (UTC): {utc_now.strftime('%H:%M:%S')}")
+        print(f"🔄 Running scheduled analysis at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*60}\n")
         
         results = []
@@ -118,63 +78,57 @@ class AnalysisScheduler:
             # Send individual alerts for high-confidence signals
             for signal in high_confidence_signals:
                 self.telegram.send_high_confidence_alert(signal)
+            
+            # Send summary
+            # self.telegram.send_daily_summary(results)  # Uncomment if you want summaries
         
         return results
     
+    def schedule_jobs(self):
+        """Schedule analysis jobs - every 30 min during market hours (ET)"""
+        
+        # Market hours: 9:30 AM - 4:00 PM ET (every 30 minutes)
+        market_times = [
+            "09:30", "10:00", "10:30", "11:00", "11:30", 
+            "12:00", "12:30", "13:00", "13:30", "14:00", 
+            "14:30", "15:00", "15:30", "16:00"
+        ]
+        
+        for time_str in market_times:
+            schedule.every().day.at(time_str).do(self.run_analysis)
+        
+        print(f"\n⏰ Scheduled analysis (ET):")
+        print(f"  📊 Every 30 minutes during market hours")
+        print(f"  🕐 Times: {', '.join(market_times[:4])}...")
+        print(f"  📈 Total: {len(market_times)} analyses per trading day")
+        print(f"\n🤖 Bot is running 24/7... Press Ctrl+C to stop\n")
+    
     def run_forever(self):
-        """Run scheduler loop - checks every minute for scheduled times"""
+        """Run scheduler loop"""
         
-        print("\n" + "="*60)
-        print("⏰ TIMEZONE-AWARE SCHEDULER STARTED")
-        print("="*60)
-        print(f"📊 Tickers: {', '.join(self.tickers)}")
-        print(f"🕐 Schedule: Every 30 min during market hours (ET)")
-        print(f"📅 Days: Monday - Friday")
-        print(f"⏰ Times (ET): 9:30 AM - 4:00 PM (14 analyses/day)")
-        print(f"\n🌍 Server timezone: {time.tzname[0]}")
+        # Run once immediately
+        print("🚀 Running initial analysis...")
+        self.run_analysis()
         
-        et_now = self.get_current_et_time()
-        print(f"🕐 Current ET time: {et_now.strftime('%Y-%m-%d %I:%M %p %Z')}")
-        print(f"📍 Day: {et_now.strftime('%A')}")
-        print("="*60)
+        # Schedule future runs
+        self.schedule_jobs()
         
-        # Run immediately on startup if during market hours
-        if self.should_run_now():
-            print("\n🚀 Starting initial analysis (within scheduled time)...")
-            try:
-                self.run_analysis()
-            except Exception as e:
-                print(f"❌ Initial analysis error: {e}")
-        else:
-            print(f"\n⏸️  Outside market hours - waiting for next scheduled time...")
-        
-        print("\n🤖 Scheduler running... checking every minute\n")
-        
-        # Main loop: check every minute
+        # Run scheduler loop
         while True:
-            try:
-                if self.should_run_now():
-                    self.run_analysis()
-                
-                # Sleep for 60 seconds
-                time.sleep(60)
-                
-            except KeyboardInterrupt:
-                print("\n\n👋 Scheduler stopped by user")
-                break
-            except Exception as e:
-                print(f"❌ Error in scheduler loop: {e}")
-                time.sleep(60)
+            schedule.run_pending()
+            time.sleep(60)  # Check every minute
 
 
 def run_manual():
     """Run analysis manually (for testing)"""
+    
     scheduler = AnalysisScheduler()
     scheduler.run_analysis()
 
 
 def run_continuous():
     """Run continuous scheduled analysis"""
+    
     scheduler = AnalysisScheduler()
     
     try:
@@ -198,7 +152,7 @@ if __name__ == '__main__':
         print("""
 ╔════════════════════════════════════════════════════════════╗
 ║       📊 TRADING ANALYSIS SCHEDULER                        ║
-║       Timezone-aware: Runs at correct ET times             ║
+║       Running automated analysis 3x daily                  ║
 ╚════════════════════════════════════════════════════════════╝
 """)
         run_continuous()
