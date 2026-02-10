@@ -207,25 +207,52 @@ class NewsSignalExtractor:
             signal = self.extract_signals(headline)
             signal['pub_date'] = pub_date
             signals.append(signal)
+
+        # Sort most recent first
+        signals.sort(key=lambda s: s['pub_date'], reverse=True)
+
+        # Recency weighting: newest headlines carry more weight
+        def recency_weight(pub_date: datetime) -> float:
+            now = datetime.now(pub_date.tzinfo) if getattr(pub_date, 'tzinfo', None) else datetime.now()
+            age_hours = max(0.0, (now - pub_date).total_seconds() / 3600)
+            # Weight 1.5 for just-now, tapering to 1.0 by 24h
+            boost = max(0.0, (24.0 - age_hours) / 24.0) * 0.5
+            return 1.0 + boost
         
-        # Calculate aggregate metrics
-        bullish_count = sum(1 for s in signals if s['direction'] == 'BULLISH')
-        bearish_count = sum(1 for s in signals if s['direction'] == 'BEARISH')
-        neutral_count = len(signals) - bullish_count - bearish_count
+        # Raw counts for breakdown
+        raw_bullish = sum(1 for s in signals if s['direction'] == 'BULLISH')
+        raw_bearish = sum(1 for s in signals if s['direction'] == 'BEARISH')
+        raw_neutral = len(signals) - raw_bullish - raw_bearish
+
+        # Calculate aggregate metrics (recency-weighted)
+        weighted_bullish = 0.0
+        weighted_bearish = 0.0
+        weighted_neutral = 0.0
+        total_weight = 0.0
+
+        for s in signals:
+            w = recency_weight(s['pub_date'])
+            total_weight += w
+            if s['direction'] == 'BULLISH':
+                weighted_bullish += w
+            elif s['direction'] == 'BEARISH':
+                weighted_bearish += w
+            else:
+                weighted_neutral += w
         
         # Aggregate direction
-        if bullish_count > bearish_count + 1:
+        if weighted_bullish > weighted_bearish + 1:
             agg_direction = 'BULLISH'
-            agg_confidence = bullish_count / len(signals)
-        elif bearish_count > bullish_count + 1:
+            agg_confidence = weighted_bullish / total_weight
+        elif weighted_bearish > weighted_bullish + 1:
             agg_direction = 'BEARISH'
-            agg_confidence = bearish_count / len(signals)
+            agg_confidence = weighted_bearish / total_weight
         else:
             agg_direction = 'MIXED'
-            agg_confidence = max(bullish_count, bearish_count) / len(signals)
+            agg_confidence = max(weighted_bullish, weighted_bearish) / total_weight
         
-        # Average impact
-        avg_impact = sum(s['impact_score'] for s in signals) / len(signals)
+        # Average impact (recency-weighted)
+        avg_impact = sum(s['impact_score'] * recency_weight(s['pub_date']) for s in signals) / total_weight
         
         # Dominant catalyst
         catalysts = [s['catalyst'] for s in signals if s['catalyst'] != 'NONE']
@@ -235,8 +262,8 @@ class NewsSignalExtractor:
             dominant_catalyst = 'NONE'
         
         # Signal consistency (how aligned are the signals?)
-        max_direction_count = max(bullish_count, bearish_count, neutral_count)
-        consistency = max_direction_count / len(signals)
+        max_direction_count = max(weighted_bullish, weighted_bearish, weighted_neutral)
+        consistency = max_direction_count / total_weight
         
         # Recent trend (last 3 articles weighted more)
         recent_signals = signals[:3]
@@ -259,9 +286,9 @@ class NewsSignalExtractor:
             'recent_trend': recent_trend,
             'article_breakdown': {
                 'total': len(signals),
-                'bullish': bullish_count,
-                'bearish': bearish_count,
-                'neutral': neutral_count
+                'bullish': raw_bullish,
+                'bearish': raw_bearish,
+                'neutral': raw_neutral
             },
             'top_signals': sorted(signals, key=lambda x: x['impact_score'], reverse=True)[:3]
         }
