@@ -202,12 +202,12 @@ def get_news():
                 entry = news_map.get(key)
 
                 if entry is None:
-                    # Convert to UTC (timestamp should already have timezone from source)
-                    if published_at.tzinfo is None:
-                        # Shouldn't happen, but fallback to UTC if needed
-                        published_at = published_at.replace(tzinfo=utc_tz)
-                    
-                    published_utc = published_at.astimezone(utc_tz)
+                    # published_at is naive ET time from news_fetching
+                    # Convert ET -> UTC for frontend
+                    from zoneinfo import ZoneInfo
+                    et_tz = ZoneInfo("America/New_York")
+                    published_et = published_at.replace(tzinfo=et_tz)
+                    published_utc = published_et.astimezone(utc_tz)
 
                     news_map[key] = {
                         'headline': key,

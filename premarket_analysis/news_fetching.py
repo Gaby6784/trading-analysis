@@ -67,8 +67,8 @@ def get_cached_news(ticker: str) -> Optional[List[Tuple[str, datetime]]]:
             cache_time = datetime.fromisoformat(cache_data['timestamp'])
             if (datetime.now() - cache_time).total_seconds() < CACHE_DURATION_MINUTES * 60:
                 logger.info(f"   ✓ Using cached news for {ticker}")
-                # Reconstruct datetime objects (preserve timezone if present)
-                articles = [(article['headline'], datetime.fromisoformat(article['date'])) 
+                # Reconstruct datetime objects as naive (already in ET from when cached)
+                articles = [(article['headline'], datetime.fromisoformat(article['date']).replace(tzinfo=None)) 
                            for article in cache_data['articles']]
                 return articles
         except Exception as e:
@@ -150,18 +150,15 @@ def fetch_yahoo_rss_news(ticker: str) -> List[Tuple[str, datetime]]:
                     # Parse date - skip if parsing fails (don't use fallback datetime.now())
                     if pub_date is not None and pub_date.text:
                         try:
-                            # Keep timezone info from RSS feed (usually UTC/GMT)
+                            from zoneinfo import ZoneInfo
+                            # Parse with timezone (usually UTC/GMT from RSS)
                             article_date = date_parser.parse(pub_date.text)
-                            # Convert to naive ET for comparison with cutoff
+                            # Convert to naive ET for consistency
                             if article_date.tzinfo:
-                                from zoneinfo import ZoneInfo
                                 et_tz = ZoneInfo("America/New_York")
-                                article_date_et = article_date.astimezone(et_tz).replace(tzinfo=None)
-                            else:
-                                article_date_et = article_date
+                                article_date = article_date.astimezone(et_tz).replace(tzinfo=None)
                             # Only include if within lookback window
-                            if article_date_et >= cutoff_time:
-                                # Store with timezone info preserved
+                            if article_date >= cutoff_time:
                                 articles.append((title.text, article_date))
                         except:
                             # Skip articles with unparseable dates
@@ -212,27 +209,23 @@ def fetch_finviz_news(ticker: str) -> List[Tuple[str, datetime]]:
                         # Parse date/time
                         try:
                             # Check if date_cell contains a date (e.g., "Feb-09-26 08:12AM")
-                            # Finviz times are in ET
-                            from zoneinfo import ZoneInfo
-                            et_tz = ZoneInfo("America/New_York")
+                            # Finviz times are already in ET, parse as naive
                             if any(char.isalpha() for char in date_cell[:7]):
                                 # Full date + time
                                 parsed = date_parser.parse(date_cell)
                                 current_date = parsed.date()
-                                article_date = parsed.replace(tzinfo=et_tz)
+                                article_date = parsed.replace(tzinfo=None)
                             else:
                                 # Time only (e.g., "08:04AM") - use current_date
                                 if current_date:
                                     time_obj = date_parser.parse(date_cell).time()
-                                    article_date = datetime.combine(current_date, time_obj).replace(tzinfo=et_tz)
+                                    article_date = datetime.combine(current_date, time_obj)
                                 else:
                                     # No previous date to reference, skip
                                     continue
                             
-                            # Convert to ET for comparison, but keep timezone in stored date
-                            article_date_naive = article_date.replace(tzinfo=None) if article_date.tzinfo else article_date
                             # Only include if within lookback window
-                            if article_date_naive >= cutoff_time:
+                            if article_date >= cutoff_time:
                                 articles.append((headline, article_date))
                         except:
                             # Skip articles with unparseable dates
@@ -284,7 +277,13 @@ def fetch_reuters_rss(ticker: str) -> List[Tuple[str, datetime]]:
                     if any(keyword.lower() in title.text.lower() for keyword in keywords):
                         if pub_date is not None and pub_date.text:
                             try:
-                                article_date = date_parser.parse(pub_date.text).replace(tzinfo=None)
+                                from zoneinfo import ZoneInfo
+                                # Parse with timezone (usually UTC from Reuters)
+                                article_date = date_parser.parse(pub_date.text)
+                                # Convert to naive ET
+                                if article_date.tzinfo:
+                                    et_tz = ZoneInfo("America/New_York")
+                                    article_date = article_date.astimezone(et_tz).replace(tzinfo=None)
                                 if article_date >= cutoff_time:
                                     articles.append((title.text, article_date))
                             except:
@@ -384,8 +383,13 @@ def fetch_newsapi_headlines(ticker: str, hours: int = 24) -> List[Tuple[str, dat
             for article in articles_data:
                 if article.get('title'):
                     try:
+                        from zoneinfo import ZoneInfo
                         # NewsAPI returns UTC timestamps
                         pub_date = date_parser.parse(article['publishedAt'])
+                        # Convert to naive ET
+                        if pub_date.tzinfo:
+                            et_tz = ZoneInfo("America/New_York")
+                            pub_date = pub_date.astimezone(et_tz).replace(tzinfo=None)
                         articles.append((article['title'], pub_date))
                     except:
                         pass
