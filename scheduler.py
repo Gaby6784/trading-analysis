@@ -85,22 +85,23 @@ class AnalysisScheduler:
         return results
     
     def schedule_jobs(self):
-        """Schedule analysis jobs for market hours (ET)"""
+        """Schedule analysis jobs - every 30 min during market hours (ET)"""
         
-        # Market open: 9:30 AM ET
-        schedule.every().day.at("09:30").do(self.run_analysis)
+        # Market hours: 9:30 AM - 4:00 PM ET (every 30 minutes)
+        market_times = [
+            "09:30", "10:00", "10:30", "11:00", "11:30", 
+            "12:00", "12:30", "13:00", "13:30", "14:00", 
+            "14:30", "15:00", "15:30", "16:00"
+        ]
         
-        # Midday: 12:00 PM ET
-        schedule.every().day.at("12:00").do(self.run_analysis)
+        for time_str in market_times:
+            schedule.every().day.at(time_str).do(self.run_analysis)
         
-        # Before close: 3:30 PM ET
-        schedule.every().day.at("15:30").do(self.run_analysis)
-        
-        print(f"\n⏰ Scheduled analysis times (ET):")
-        print(f"  • 09:30 AM - Market open")
-        print(f"  • 12:00 PM - Midday check")
-        print(f"  • 03:30 PM - Pre-close check")
-        print(f"\n🤖 Bot is running... Press Ctrl+C to stop\n")
+        print(f"\n⏰ Scheduled analysis (ET):")
+        print(f"  📊 Every 30 minutes during market hours")
+        print(f"  🕐 Times: {', '.join(market_times[:4])}...")
+        print(f"  📈 Total: {len(market_times)} analyses per trading day")
+        print(f"\n🤖 Bot is running 24/7... Press Ctrl+C to stop\n")
     
     def run_forever(self):
         """Run scheduler loop"""
