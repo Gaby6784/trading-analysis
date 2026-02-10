@@ -7,11 +7,13 @@ Provides REST endpoints and web dashboard
 from flask import Flask, jsonify, render_template, send_from_directory, request
 from flask_cors import CORS
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import json
 from pathlib import Path
 
 from premarket_analysis.main_with_predictions import analyze_ticker_with_prediction
+from premarket_analysis.news_fetching import fetch_news_headlines
 from database import Database, AnalysisResult
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
@@ -174,6 +176,64 @@ def get_stats():
             'stats': stats
         })
         
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/news')
+def get_news():
+    """Get latest news across tickers with target symbols attached."""
+    try:
+        hours = int(request.args.get('hours', 24))
+        limit = int(request.args.get('limit', 30))
+
+        et_tz = ZoneInfo("America/New_York")
+        news_map = {}
+
+        for ticker in DEFAULT_TICKERS:
+            articles, source, _, _ = fetch_news_headlines(ticker, hours=hours)
+
+            for headline, published_at in articles:
+                key = headline.strip()
+                entry = news_map.get(key)
+
+                if entry is None:
+                    # Assume naive timestamps are ET
+                    if published_at.tzinfo is None:
+                        published_at = published_at.replace(tzinfo=et_tz)
+
+                    published_utc = published_at.astimezone(timezone.utc)
+
+                    news_map[key] = {
+                        'headline': key,
+                        'published_at': published_utc.isoformat().replace('+00:00', 'Z'),
+                        'sources': {source},
+                        'tickers': {ticker}
+                    }
+                else:
+                    entry['sources'].add(source)
+                    entry['tickers'].add(ticker)
+
+        news_items = list(news_map.values())
+
+        # Sort by published_at (descending)
+        news_items.sort(key=lambda x: x['published_at'], reverse=True)
+
+        # Normalize sets to sorted lists
+        for item in news_items:
+            item['sources'] = sorted(list(item['sources']))
+            item['tickers'] = sorted(list(item['tickers']))
+
+        return jsonify({
+            'success': True,
+            'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            'count': min(len(news_items), limit),
+            'results': news_items[:limit]
+        })
+
     except Exception as e:
         return jsonify({
             'success': False,

@@ -117,6 +117,57 @@
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
         }
 
+        .news-feed {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .news-list {
+            display: grid;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .news-item {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 12px 14px;
+            border-left: 4px solid #667eea;
+        }
+
+        .news-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 6px;
+        }
+
+        .news-meta {
+            color: #666;
+            font-size: 0.85em;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .news-tags {
+            display: inline-flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .news-tag {
+            background: #e5e7eb;
+            color: #374151;
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-size: 0.75em;
+            font-weight: 600;
+        }
+
         .alert-item {
             background: linear-gradient(135deg, #f6d365 0%, #fda085 100%);
             padding: 15px;
@@ -305,6 +356,11 @@
             <div id="alertsList"></div>
         </div>
 
+        <div class="news-feed" id="newsSection">
+            <h2>📰 Latest News (Last 24h)</h2>
+            <div id="newsList" class="news-list"></div>
+        </div>
+
         <div id="loadingSection" class="loading" style="display: none;">
             <div class="spinner"></div>
             <p>Running analysis...</p>
@@ -363,6 +419,7 @@
         // Load stats on page load
         loadStats();
         loadLatestResults();
+        loadNews();
 
         // Auto-refresh every 30 minutes during ET market hours
         const MARKET_TIMES = new Set([
@@ -386,6 +443,7 @@
                 lastAutoRefreshKey = key;
                 loadStats();
                 loadLatestResults();
+                loadNews();
             }
         }, 60 * 1000);
 
@@ -393,6 +451,7 @@
         document.getElementById('refreshBtn').addEventListener('click', () => {
             loadStats();
             loadLatestResults();
+            loadNews();
         });
 
         document.getElementById('runAnalysisBtn').addEventListener('click', runAnalysis);
@@ -456,6 +515,7 @@
                 if (data.success) {
                     displayResults(data.results);
                     loadStats();
+                    loadNews();
                 } else {
                     showError('Analysis failed: ' + data.error);
                 }
@@ -549,6 +609,49 @@
                 
                 grid.appendChild(card);
             });
+        }
+
+        async function loadNews() {
+            const list = document.getElementById('newsList');
+            list.innerHTML = '<div style="color: #666;">Loading news...</div>';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/news?hours=24&limit=30`);
+                const data = await response.json();
+
+                if (!data.success) {
+                    list.innerHTML = '<div style="color: #991b1b;">Failed to load news</div>';
+                    return;
+                }
+
+                if (!data.results || data.results.length === 0) {
+                    list.innerHTML = '<div style="color: #666;">No recent headlines found.</div>';
+                    return;
+                }
+
+                list.innerHTML = '';
+
+                data.results.forEach(item => {
+                    const sources = (item.sources || []).join(', ');
+                    const tickers = (item.tickers || []);
+
+                    const tickerTags = tickers.map(t => `<span class="news-tag">${t}</span>`).join('');
+
+                    const el = document.createElement('div');
+                    el.className = 'news-item';
+                    el.innerHTML = `
+                        <div class="news-title">${item.headline}</div>
+                        <div class="news-meta">
+                            <span>${formatLocalTime(item.published_at)}</span>
+                            <span>${sources}</span>
+                            <span class="news-tags">${tickerTags}</span>
+                        </div>
+                    `;
+                    list.appendChild(el);
+                });
+            } catch (error) {
+                list.innerHTML = `<div style="color: #991b1b;">Error loading news: ${error.message}</div>`;
+            }
         }
 
         function displayAlerts(alerts) {
