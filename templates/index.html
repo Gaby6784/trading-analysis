@@ -325,9 +325,23 @@
         const LOCAL_TIMEZONE = 'Europe/Bucharest';
         const MARKET_TIMEZONE = 'America/New_York';
 
+        function parseServerTimestamp(value) {
+            if (!value) return null;
+            if (typeof value !== 'string') return new Date(value);
+
+            // If timestamp has timezone info, trust it.
+            const hasTz = /[Zz]|[+-]\d{2}:?\d{2}$/.test(value);
+            if (hasTz) return new Date(value);
+
+            // Normalize "YYYY-MM-DD HH:MM:SS" -> UTC ISO
+            const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+            return new Date(`${normalized}Z`);
+        }
+
         // Format timestamp in local (Bucharest) timezone
         function formatLocalTime(isoString) {
-            const date = new Date(isoString);
+            const date = parseServerTimestamp(isoString);
+            if (!date || Number.isNaN(date.getTime())) return 'N/A';
             return date.toLocaleString('en-US', {
                 timeZone: LOCAL_TIMEZONE,
                 year: 'numeric',
@@ -395,14 +409,16 @@
                     document.getElementById('alerts24h').textContent = data.stats.alerts_24h;
                     
                     if (data.stats.latest_analysis) {
-                        const date = new Date(data.stats.latest_analysis);
-                        document.getElementById('lastUpdate').textContent = date.toLocaleTimeString('en-US', {
-                            timeZone: LOCAL_TIMEZONE,
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: true,
-                            timeZoneName: 'short'
-                        });
+                        const date = parseServerTimestamp(data.stats.latest_analysis);
+                        if (date && !Number.isNaN(date.getTime())) {
+                            document.getElementById('lastUpdate').textContent = date.toLocaleTimeString('en-US', {
+                                timeZone: LOCAL_TIMEZONE,
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                hour12: true,
+                                timeZoneName: 'short'
+                            });
+                        }
                     }
                 }
             } catch (error) {
