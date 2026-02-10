@@ -322,30 +322,58 @@
         // API base URL
         const API_BASE = window.location.origin;
 
-        // Format timestamp in ET timezone
-        function formatETTime(isoString) {
+        const LOCAL_TIMEZONE = 'Europe/Bucharest';
+        const MARKET_TIMEZONE = 'America/New_York';
+
+        // Format timestamp in local (Bucharest) timezone
+        function formatLocalTime(isoString) {
             const date = new Date(isoString);
             return date.toLocaleString('en-US', {
-                timeZone: 'America/New_York',
+                timeZone: LOCAL_TIMEZONE,
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit',
                 second: '2-digit',
-                hour12: true
-            }) + ' ET';
+                hour12: true,
+                timeZoneName: 'short'
+            });
+        }
+
+        // Get current time in ET for market-hour checks
+        function getETNow() {
+            return new Date(new Date().toLocaleString('en-US', { timeZone: MARKET_TIMEZONE }));
         }
 
         // Load stats on page load
         loadStats();
         loadLatestResults();
 
-        // Auto-refresh every 5 minutes
+        // Auto-refresh every 30 minutes during ET market hours
+        const MARKET_TIMES = new Set([
+            '09:30', '10:00', '10:30', '11:00', '11:30',
+            '12:00', '12:30', '13:00', '13:30', '14:00',
+            '14:30', '15:00', '15:30', '16:00'
+        ]);
+        let lastAutoRefreshKey = null;
+
         setInterval(() => {
-            loadStats();
-            loadLatestResults();
-        }, 5 * 60 * 1000);
+            const etNow = getETNow();
+            const day = etNow.getDay();
+            const isWeekday = day >= 1 && day <= 5;
+
+            const hh = String(etNow.getHours()).padStart(2, '0');
+            const mm = String(etNow.getMinutes()).padStart(2, '0');
+            const timeStr = `${hh}:${mm}`;
+            const key = `${etNow.getFullYear()}-${etNow.getMonth() + 1}-${etNow.getDate()}-${timeStr}`;
+
+            if (isWeekday && MARKET_TIMES.has(timeStr) && lastAutoRefreshKey !== key) {
+                lastAutoRefreshKey = key;
+                loadStats();
+                loadLatestResults();
+            }
+        }, 60 * 1000);
 
         // Button handlers
         document.getElementById('refreshBtn').addEventListener('click', () => {
@@ -369,11 +397,12 @@
                     if (data.stats.latest_analysis) {
                         const date = new Date(data.stats.latest_analysis);
                         document.getElementById('lastUpdate').textContent = date.toLocaleTimeString('en-US', {
-                            timeZone: 'America/New_York',
+                            timeZone: LOCAL_TIMEZONE,
                             hour: '2-digit',
                             minute: '2-digit',
-                            hour12: true
-                        }) + ' ET';
+                            hour12: true,
+                            timeZoneName: 'short'
+                        });
                     }
                 }
             } catch (error) {
@@ -498,7 +527,7 @@
                     </div>
                     
                     <div class="timestamp">
-                        ${formatETTime(result.timestamp)}
+                        ${formatLocalTime(result.timestamp)}
                     </div>
                 `;
                 
@@ -522,7 +551,7 @@
                     <span class="alert-ticker">${alert.ticker}</span>
                     <span> - Score: ${alert.score.toFixed(0)} (${alert.category})</span>
                     <span> | News: ${alert.news_direction} ${alert.news_confidence.toFixed(0)}%</span>
-                    <span> | ${formatETTime(alert.timestamp)}</span>
+                    <span> | ${formatLocalTime(alert.timestamp)}</span>
                 `;
                 list.appendChild(item);
             });
