@@ -190,7 +190,8 @@ def get_news():
         hours = int(request.args.get('hours', 24))
         limit = int(request.args.get('limit', 30))
 
-        et_tz = ZoneInfo("America/New_York")
+        utc_tz = timezone.utc
+
         news_map = {}
 
         for ticker in DEFAULT_TICKERS:
@@ -201,11 +202,12 @@ def get_news():
                 entry = news_map.get(key)
 
                 if entry is None:
-                    # Assume naive timestamps are ET
+                    # Convert to UTC (timestamp should already have timezone from source)
                     if published_at.tzinfo is None:
-                        published_at = published_at.replace(tzinfo=et_tz)
-
-                    published_utc = published_at.astimezone(timezone.utc)
+                        # Shouldn't happen, but fallback to UTC if needed
+                        published_at = published_at.replace(tzinfo=utc_tz)
+                    
+                    published_utc = published_at.astimezone(utc_tz)
 
                     news_map[key] = {
                         'headline': key,
