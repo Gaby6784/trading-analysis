@@ -57,28 +57,28 @@ def analyze():
                 db_result = db.save_analysis(
                     ticker=ticker,
                     score=analysis['score'],
-                    category=analysis['category'],
-                    rsi=analysis['technical'].get('rsi'),
-                    trend=analysis['technical'].get('trend'),
-                    price=analysis['technical'].get('price'),
-                    news_direction=analysis['prediction']['prediction'],
-                    news_confidence=analysis['prediction']['confidence_score'],
-                    alignment=analysis['alignment']['status'],
-                    alignment_score=analysis['alignment']['score']
+                    category=analysis['score_category'],
+                    rsi=analysis.get('rsi'),
+                    trend=analysis.get('trend'),
+                    price=analysis.get('price'),
+                    news_direction=analysis['news_prediction'],
+                    news_confidence=analysis['prediction_confidence'],
+                    alignment=analysis['alignment'],
+                    alignment_score=analysis['alignment_score']
                 )
                 
                 results.append({
                     'ticker': ticker,
                     'score': analysis['score'],
-                    'category': analysis['category'],
-                    'rsi': analysis['technical'].get('rsi'),
-                    'trend': analysis['technical'].get('trend'),
-                    'price': analysis['technical'].get('price'),
-                    'news_direction': analysis['prediction']['prediction'],
-                    'news_confidence': analysis['prediction']['confidence_score'],
-                    'expected_move': analysis['prediction']['expected_move'],
-                    'alignment': analysis['alignment']['status'],
-                    'alignment_score': analysis['alignment']['score'],
+                    'category': analysis['score_category'],
+                    'rsi': analysis.get('rsi'),
+                    'trend': analysis.get('trend'),
+                    'price': analysis.get('price'),
+                    'news_direction': analysis['news_prediction'],
+                    'news_confidence': analysis['prediction_confidence'],
+                    'expected_move': analysis['expected_move'],
+                    'alignment': analysis['alignment'],
+                    'alignment_score': analysis['alignment_score'],
                     'timestamp': db_result.timestamp.isoformat()
                 })
                 
