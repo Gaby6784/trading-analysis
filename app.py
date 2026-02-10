@@ -181,6 +181,35 @@ def get_stats():
         }), 500
 
 
+@app.route('/debug/config')
+def debug_config():
+    """Debug endpoint to check Railway configuration"""
+    import sys
+    
+    config = {
+        'python_version': sys.version,
+        'environment_variables': {
+            'PORT': os.environ.get('PORT', 'NOT SET'),
+            'NEWS_API_KEY': 'SET ✅' if os.environ.get('NEWS_API_KEY') else 'MISSING ❌',
+            'TELEGRAM_BOT_TOKEN': 'SET' if os.environ.get('TELEGRAM_BOT_TOKEN') else 'NOT SET (optional)',
+            'TELEGRAM_CHAT_ID': 'SET' if os.environ.get('TELEGRAM_CHAT_ID') else 'NOT SET (optional)',
+        },
+        'database_records': db.get_stats()['total_records'],
+        'tickers_to_analyze': DEFAULT_TICKERS
+    }
+    
+    # Test imports
+    try:
+        import yfinance
+        import pandas
+        import pandas_ta
+        config['imports_status'] = 'All imports successful ✅'
+    except Exception as e:
+        config['imports_status'] = f'Import error: {str(e)} ❌'
+    
+    return jsonify(config)
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_ENV') == 'development'
