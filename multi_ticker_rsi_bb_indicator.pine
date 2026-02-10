@@ -1,0 +1,318 @@
+//@version=6
+strategy("Supertrend + Hull + RSI + %R Strategy",
+     overlay=true,
+     initial_capital=200,
+     pyramiding=0,
+     process_orders_on_close=true,
+     calc_on_every_tick=true)
+
+// ========================================
+// INPUT PARAMETERS
+// ========================================
+// Signal Settings
+strictBarClose = input.bool(true, "Strict Bar-Close Confirmation", tooltip="Only trigger signals on confirmed bar close")
+useRsiFilter = input.bool(true, "Use RSI Filter", tooltip="Require RSI or %R to confirm entry timing")
+useWprFilter = input.bool(true, "Use %R Filter", tooltip="Require RSI or %R to confirm entry timing")
+useSupertrend = input.bool(true, "Use Supertrend for Exits", tooltip="Close position when Supertrend flips against you")
+
+// Supertrend Settings
+stAtrLength = input.int(10, "Supertrend ATR Length", minval=1)
+stFactor = input.float(3.0, "Supertrend Factor", minval=0.1, step=0.1)
+
+// Hull MA Settings
+hullLength = input.int(55, "Hull MA Length", minval=2)
+
+// RSI Settings
+rsiLength = input.int(14, "RSI Length", minval=1)
+rsiBuyLevel = input.int(50, "RSI Buy Level", minval=1, maxval=60, tooltip="RSI at or below this triggers buy when Hull rising (50 = any pullback below neutral)")
+rsiSellLevel = input.int(50, "RSI Sell Level", minval=40, maxval=99, tooltip="RSI at or above this triggers sell when Hull falling (50 = any rally above neutral)")
+
+// Williams %R Settings
+wprLength = input.int(14, "Williams %R Length", minval=1)
+wprBuyLevel = input.int(-50, "%R Buy Level", minval=-100, maxval=0, tooltip="%R at or below this triggers buy when Hull rising")
+wprSellLevel = input.int(-50, "%R Sell Level", minval=-100, maxval=0, tooltip="%R at or above this triggers sell when Hull falling")
+
+// Risk Management Settings
+accountBalance = input.float(200.0, "Account Balance", minval=1.0, group="Risk Management", tooltip="Total account balance in your trading account")
+riskPerTrade = input.float(2.0, "Risk Per Trade (%)", minval=0.1, maxval=10.0, step=0.1, group="Risk Management", tooltip="Percentage of account to risk per trade (Recommended: 1-2%)")
+atrLength = input.int(14, "ATR Length (for SL/TP)", minval=1, group="Risk Management")
+slAtrMult = input.float(1.5, "Stop Loss ATR Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Risk Management", tooltip="SL = entry +/- ATR * this value")
+tpAtrMult = input.float(3.0, "Take Profit ATR Multiplier", minval=1.0, maxval=10.0, step=0.1, group="Risk Management", tooltip="TP = entry +/- ATR * this value")
+
+// Cooldown Settings
+useCooldown = input.bool(true, "Use Cooldown After Trade", group="Risk Management", tooltip="Wait N bars after a trade closes before entering again")
+cooldownBars = input.int(1, "Cooldown Bars", minval=1, maxval=50, group="Risk Management", tooltip="Wait this many bars after exit before re-entering (1 = can re-enter next bar)")
+
+// Trade Direction
+tradeDirection = input.string("Both", "Trade Direction", options=["Both", "Long Only", "Short Only"], tooltip="Both = long and short signals. Long Only is safer for strong uptrend stocks.")
+
+// Date Range Settings
+useDateFilter = input.bool(true, "Use Date Range Filter", group="Date Range", tooltip="Only trade within specified date range")
+startDate = input.time(timestamp("01 Feb 2025 00:00 +0000"), "Start Date", group="Date Range")
+endDate = input.time(timestamp("01 Feb 2026 00:00 +0000"), "End Date", group="Date Range")
+
+// Multi-Ticker Scanning Settings
+scanTimeframe = input.timeframe("60", "Scan Timeframe", tooltip="Fixed timeframe for scanning other tickers")
+scanUseConfirmedBars = input.bool(true, "Scan: Use Closed Candles", tooltip="If true, uses the last closed candle of Scan Timeframe")
+scanBarOffset = scanUseConfirmedBars ? 1 : 0
+
+// Additional Tickers to Monitor
+ticker1 = input.symbol("NVDA", "Additional Ticker 1")
+ticker2 = input.symbol("META", "Additional Ticker 2")
+ticker3 = input.symbol("MSFT", "Additional Ticker 3")
+ticker4 = input.symbol("NFLX", "Additional Ticker 4")
+ticker5 = input.symbol("AAPL", "Additional Ticker 5")
+ticker6 = input.symbol("PUBM", "Additional Ticker 6")
+
+// Table Position
+tablePosition = input.string("top_right", "Table Position",
+     options=["top_left", "top_center", "top_right", "middle_left",
+              "middle_center", "middle_right", "bottom_left",
+              "bottom_center", "bottom_right"])
+
+// ========================================
+// INDICATOR CALCULATIONS (Current Chart)
+// ========================================
+// Supertrend
+// NOTE: ta.supertrend direction: -1 = uptrend (bullish), +1 = downtrend (bearish)
+[stValue, stDir] = ta.supertrend(stFactor, stAtrLength)
+trendUp = stDir == -1
+trendDown = stDir == 1
+
+// Hull MA
+hull = ta.hma(close, hullLength)
+hullRising = hull > hull[1]
+hullFalling = hull < hull[1]
+hullTurnedUp = hullRising and not hullRising[1]
+hullTurnedDown = hullFalling and not hullFalling[1]
+
+// RSI
+rsiValue = ta.rsi(close, rsiLength)
+
+// Williams %R
+highestHigh = ta.highest(high, wprLength)
+lowestLow = ta.lowest(low, wprLength)
+wprValue = (highestHigh - close) / math.max(highestHigh - lowestLow, syminfo.mintick) * -100.0
+
+// ATR for risk management
+atrValue = ta.atr(atrLength)
+
+// Cooldown tracking
+var int barsSinceLastExit = 999
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    barsSinceLastExit := 0
+else if strategy.position_size == 0
+    barsSinceLastExit := barsSinceLastExit + 1
+cooldownOk = not useCooldown or barsSinceLastExit >= cooldownBars
+
+// Direction filter
+allowLong = tradeDirection != "Short Only"
+allowShort = tradeDirection != "Long Only"
+
+// Date range filter
+inDateRange = not useDateFilter or (time >= startDate and time <= endDate)
+
+// ========================================
+// SIGNAL LOGIC (Current Chart)
+// ========================================
+confirmedBar = not strictBarClose or barstate.isconfirmed
+
+// Entry timing: RSI OR %R oversold/overbought (either one is enough)
+rsiOversold = useRsiFilter and rsiValue <= rsiBuyLevel
+rsiOverbought = useRsiFilter and rsiValue >= rsiSellLevel
+wprOversold = useWprFilter and wprValue <= wprBuyLevel
+wprOverbought = useWprFilter and wprValue >= wprSellLevel
+
+// At least one oscillator must confirm (if both filters are off, timing is always true)
+entryTimingLong = rsiOversold or wprOversold or (not useRsiFilter and not useWprFilter)
+entryTimingShort = rsiOverbought or wprOverbought or (not useRsiFilter and not useWprFilter)
+
+// BUY = Hull rising + oversold (catches pullbacks in uptrends)
+// SELL = Hull falling + overbought (catches rallies in downtrends)
+buyTrigger = hullRising and entryTimingLong
+sellTrigger = hullFalling and entryTimingShort
+
+buySignal = confirmedBar and buyTrigger and allowLong
+sellSignal = confirmedBar and sellTrigger and allowShort
+
+newBuySignal = buySignal and not buySignal[1]
+newSellSignal = sellSignal and not sellSignal[1]
+
+// Exit when Supertrend flips against position (go flat, don't reverse)
+exitLong = strategy.position_size > 0 and useSupertrend and trendDown
+exitShort = strategy.position_size < 0 and useSupertrend and trendUp
+
+// ========================================
+// STRATEGY EXECUTION
+// ========================================
+// Exit on trend reversal (go flat, don't flip)
+if exitLong
+    strategy.close("Long", comment="ST Flip")
+    barsSinceLastExit := 0
+if exitShort
+    strategy.close("Short", comment="ST Flip")
+    barsSinceLastExit := 0
+
+// Position sizing: risk-based with affordability cap
+riskMoney = accountBalance * (riskPerTrade / 100)
+longSLPrice = close - atrValue * slAtrMult
+shortSLPrice = close + atrValue * slAtrMult
+longRisk = math.abs(close - longSLPrice)
+shortRisk = math.abs(shortSLPrice - close)
+
+// Calculate units based on risk (how much to lose if SL hits)
+qtyLongRisk = longRisk > 0 ? riskMoney / longRisk : 0
+qtyShortRisk = shortRisk > 0 ? riskMoney / shortRisk : 0
+
+// Cap by affordability (can't buy more than account balance allows)
+qtyLongAffordable = close > 0 ? accountBalance / close : 0
+qtyShortAffordable = close > 0 ? accountBalance / close : 0
+
+// Take the minimum (risk-based or affordable)
+qtyLong = math.min(qtyLongRisk, qtyLongAffordable)
+qtyShort = math.min(qtyShortRisk, qtyShortAffordable)
+
+// Close positions if we exit the date range
+if useDateFilter and time > endDate and strategy.position_size != 0
+    strategy.close_all(comment="Date Range End")
+
+// Enter only when flat + cooldown passed + signal fires + in date range
+if newBuySignal and strategy.position_size == 0 and cooldownOk and inDateRange
+    strategy.entry("Long", strategy.long, qty=qtyLong)
+    strategy.exit("Long SL/TP", "Long", stop=close - atrValue * slAtrMult, limit=close + atrValue * tpAtrMult)
+
+if newSellSignal and strategy.position_size == 0 and cooldownOk and inDateRange
+    strategy.entry("Short", strategy.short, qty=qtyShort)
+    strategy.exit("Short SL/TP", "Short", stop=close + atrValue * slAtrMult, limit=close - atrValue * tpAtrMult)
+
+// ========================================
+// PLOTS (Current Chart)
+// ========================================
+plot(stValue, "Supertrend", color=trendUp ? color.green : color.red, linewidth=2)
+plot(hull, "Hull MA", color=hullRising ? color.teal : color.orange, linewidth=2)
+
+plotshape(newBuySignal, title="Buy", style=shape.labelup, text="BUY", color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+plotshape(newSellSignal, title="Sell", style=shape.labeldown, text="SELL", color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+// ========================================
+// ALERTS
+// ========================================
+// Calculate alert details
+longSL = close - atrValue * slAtrMult
+longTP = close + atrValue * tpAtrMult
+shortSL = close + atrValue * slAtrMult
+shortTP = close - atrValue * tpAtrMult
+
+if newBuySignal
+    alert("🟢 BUY - " + syminfo.tickerid + 
+         " | RSI: " + str.tostring(rsiValue, "#.#") + 
+         " | %R: " + str.tostring(wprValue, "#.#") + 
+         " | Entry: " + str.tostring(close, "#.##") +
+         " | SL: " + str.tostring(longSL, "#.##") + 
+         " | TP: " + str.tostring(longTP, "#.##") + 
+         " | Units: " + str.tostring(qtyLong, "#.###"), 
+         alert.freq_once_per_bar_close)
+
+if newSellSignal
+    alert("🔴 SELL - " + syminfo.tickerid + 
+         " | RSI: " + str.tostring(rsiValue, "#.#") + 
+         " | %R: " + str.tostring(wprValue, "#.#") + 
+         " | Entry: " + str.tostring(close, "#.##") +
+         " | SL: " + str.tostring(shortSL, "#.##") + 
+         " | TP: " + str.tostring(shortTP, "#.##") + 
+         " | Units: " + str.tostring(qtyShort, "#.###"), 
+         alert.freq_once_per_bar_close)
+
+// ========================================
+// MULTI-TICKER MONITORING FUNCTION
+// ========================================
+checkTickerCondition(tickerSymbol) =>
+    [tickerStValue, tickerStDir] = request.security(tickerSymbol, scanTimeframe,
+         ta.supertrend(stFactor, stAtrLength),
+         gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+    [tickerHull, tickerHullPrev, tickerRsi, tickerHighestHigh, tickerLowestLow, tickerClose] = request.security(tickerSymbol, scanTimeframe,
+         [ta.hma(close, hullLength)[scanBarOffset],
+          ta.hma(close, hullLength)[scanBarOffset + 1],
+          ta.rsi(close, rsiLength)[scanBarOffset],
+          ta.highest(high, wprLength)[scanBarOffset],
+          ta.lowest(low, wprLength)[scanBarOffset],
+          close[scanBarOffset]],
+         gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+    tickerWpr = (tickerHighestHigh - tickerClose) / math.max(tickerHighestHigh - tickerLowestLow, syminfo.mintick) * -100.0
+
+    tickerTrendUp = tickerStDir == -1
+    tickerTrendDown = tickerStDir == 1
+
+    tickerHullRising = tickerHull > tickerHullPrev
+    tickerHullFalling = tickerHull < tickerHullPrev
+
+    // Oscillator checks
+    tickerRsiOversold = useRsiFilter and tickerRsi <= rsiBuyLevel
+    tickerRsiOverbought = useRsiFilter and tickerRsi >= rsiSellLevel
+    tickerWprOversold = useWprFilter and tickerWpr <= wprBuyLevel
+    tickerWprOverbought = useWprFilter and tickerWpr >= wprSellLevel
+
+    tickerTimingLong = tickerRsiOversold or tickerWprOversold or (not useRsiFilter and not useWprFilter)
+    tickerTimingShort = tickerRsiOverbought or tickerWprOverbought or (not useRsiFilter and not useWprFilter)
+
+    // Hull rising + oversold = BUY zone, Hull falling + overbought = SELL zone
+    tickerBuy = tickerHullRising and tickerTimingLong
+    tickerSell = tickerHullFalling and tickerTimingShort
+
+    tickerStatus = tickerBuy ? "BUY" : (tickerSell ? "SELL" : "NEUTRAL")
+
+    [tickerBuy, tickerSell, tickerStatus, tickerRsi, tickerWpr, tickerStDir]
+
+// ========================================
+// CHECK CONDITIONS FOR ADDITIONAL TICKERS
+// ========================================
+[ticker1Buy, ticker1Sell, ticker1Status, ticker1Rsi, ticker1Wpr, ticker1StDir] = checkTickerCondition(ticker1)
+[ticker2Buy, ticker2Sell, ticker2Status, ticker2Rsi, ticker2Wpr, ticker2StDir] = checkTickerCondition(ticker2)
+[ticker3Buy, ticker3Sell, ticker3Status, ticker3Rsi, ticker3Wpr, ticker3StDir] = checkTickerCondition(ticker3)
+[ticker4Buy, ticker4Sell, ticker4Status, ticker4Rsi, ticker4Wpr, ticker4StDir] = checkTickerCondition(ticker4)
+[ticker5Buy, ticker5Sell, ticker5Status, ticker5Rsi, ticker5Wpr, ticker5StDir] = checkTickerCondition(ticker5)
+[ticker6Buy, ticker6Sell, ticker6Status, ticker6Rsi, ticker6Wpr, ticker6StDir] = checkTickerCondition(ticker6)
+
+// ========================================
+// CREATE STATUS TABLE
+// ========================================
+var table statusTable = table.new(position=tablePosition, columns=5, rows=8,
+     bgcolor=color.new(color.black, 85),
+     border_width=1,
+     border_color=color.new(color.gray, 50))
+
+// Row helper
+fillRow(row, symbol, status, stDir, rsiVal, wprVal) =>
+    statusColor = status == "BUY" ? color.new(color.green, 0) : status == "SELL" ? color.new(color.red, 0) : color.new(color.gray, 70)
+    stText = stDir == 1 ? "UP" : stDir == -1 ? "DOWN" : "-"
+    stColor = stDir == 1 ? color.new(color.green, 0) : stDir == -1 ? color.new(color.red, 0) : color.new(color.gray, 70)
+
+    table.cell(statusTable, 0, row, symbol, text_color=color.white)
+    table.cell(statusTable, 1, row, status, bgcolor=statusColor, text_color=color.white)
+    table.cell(statusTable, 2, row, stText, bgcolor=stColor, text_color=color.white)
+    table.cell(statusTable, 3, row, str.tostring(rsiVal, "#.0"), text_color=color.white)
+    table.cell(statusTable, 4, row, str.tostring(wprVal, "#.0"), text_color=color.white)
+
+// Only update table on the last bar to avoid repainting
+if barstate.islast and (not strictBarClose or barstate.isconfirmed)
+    // Table Headers
+    table.cell(statusTable, 0, 0, "Ticker", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(statusTable, 1, 0, "Status", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(statusTable, 2, 0, "ST", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(statusTable, 3, 0, "RSI", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(statusTable, 4, 0, "%R", bgcolor=color.new(color.gray, 70), text_color=color.white)
+
+    fillRow(1, ticker1, ticker1Status, ticker1StDir, ticker1Rsi, ticker1Wpr)
+    fillRow(2, ticker2, ticker2Status, ticker2StDir, ticker2Rsi, ticker2Wpr)
+    fillRow(3, ticker3, ticker3Status, ticker3StDir, ticker3Rsi, ticker3Wpr)
+    fillRow(4, ticker4, ticker4Status, ticker4StDir, ticker4Rsi, ticker4Wpr)
+    fillRow(5, ticker5, ticker5Status, ticker5StDir, ticker5Rsi, ticker5Wpr)
+    fillRow(6, ticker6, ticker6Status, ticker6StDir, ticker6Rsi, ticker6Wpr)
+
+// ========================================
+// ALERTS
+// ========================================
+alertcondition(newBuySignal, "Buy Signal", "BUY: Supertrend + Hull + RSI + %R")
+alertcondition(newSellSignal, "Sell Signal", "SELL: Supertrend + Hull + RSI + %R")

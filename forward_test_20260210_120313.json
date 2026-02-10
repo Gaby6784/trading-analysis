@@ -1,0 +1,10 @@
+{
+  "simulation_start": "2026-02-10T12:08:26.991978",
+  "parameters": {
+    "score_threshold": 65.0,
+    "max_positions": 3,
+    "position_size": 100.0
+  },
+  "open_trades": [],
+  "closed_trades": []
+}

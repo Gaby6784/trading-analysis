@@ -1,0 +1,119 @@
+//@version=6
+indicator("Daily Pivot Points with MidPoints", overlay=true)
+
+// ════════════════════════════════════════════════════════════════════════════
+// INPUT SETTINGS
+// ════════════════════════════════════════════════════════════════════════════
+
+input_p_color = input.color(color.yellow, "Pivot Color", group="Colors")
+input_r_color = input.color(color.red, "Resistance Color", group="Colors")
+input_s_color = input.color(color.green, "Support Color", group="Colors")
+input_mid_color = input.color(color.orange, "MidPoint Color", group="Colors")
+input_transparency = input.int(80, "Shading Transparency", minval=0, maxval=100, group="Colors")
+
+// ════════════════════════════════════════════════════════════════════════════
+// PIVOT CALCULATION
+// ════════════════════════════════════════════════════════════════════════════
+
+// Get previous daily high, low, and close without lookahead (prevents repainting)
+var float prev_high = na
+var float prev_low = na
+var float prev_close = na
+
+// Update values at the start of a new day
+if timeframe.change("D")
+    prev_high := high[1]
+    prev_low := low[1]
+    prev_close := close[1]
+
+// Calculate Pivot Point: P = (High + Low + Close) / 3
+P = (prev_high + prev_low + prev_close) / 3
+
+// Calculate Support and Resistance levels
+R1 = 2 * P - prev_low
+R2 = P + (prev_high - prev_low)
+S1 = 2 * P - prev_high
+S2 = P - (prev_high - prev_low)
+
+// Calculate MidPoints
+MidR1 = (P + R1) / 2
+MidR2 = (R1 + R2) / 2
+MidS1 = (P + S1) / 2
+MidS2 = (S1 + S2) / 2
+
+// ════════════════════════════════════════════════════════════════════════════
+// PIP OFFSET CALCULATION
+// ════════════════════════════════════════════════════════════════════════════
+
+// Calculate TRUE pip size (not point/pipette)
+// For most Forex pairs: mintick = 0.00001 (pipette), but 1 pip = 0.0001
+// For JPY pairs: mintick = 0.001 (pipette), but 1 pip = 0.01
+// Solution: multiply mintick by 10 to get the actual pip
+pip_size = syminfo.mintick * 10
+pip_offset = 1.5 * pip_size
+
+// ════════════════════════════════════════════════════════════════════════════
+// PLOTTING
+// ════════════════════════════════════════════════════════════════════════════
+
+// Plot main pivot and support/resistance levels
+plot(P, "Pivot", input_p_color, 2, plot.style_line)
+plot(R1, "R1", input_r_color, 1, plot.style_line)
+plot(R2, "R2", input_r_color, 1, plot.style_line)
+plot(S1, "S1", input_s_color, 1, plot.style_line)
+plot(S2, "S2", input_s_color, 1, plot.style_line)
+
+// Plot MidPoints with dashed style
+plot(MidR1, "MidR1", input_mid_color, 1, plot.style_circles)
+plot(MidR2, "MidR2", input_mid_color, 1, plot.style_circles)
+plot(MidS1, "MidS1", input_mid_color, 1, plot.style_circles)
+plot(MidS2, "MidS2", input_mid_color, 1, plot.style_circles)
+
+// ════════════════════════════════════════════════════════════════════════════
+// SHADED ZONES (1.5 pips above and below each level)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Pivot zone
+fill(plot(P + pip_offset, display=display.none), 
+     plot(P - pip_offset, display=display.none), 
+     color.new(input_p_color, input_transparency), "Pivot Zone")
+
+// R1 zone
+fill(plot(R1 + pip_offset, display=display.none), 
+     plot(R1 - pip_offset, display=display.none), 
+     color.new(input_r_color, input_transparency), "R1 Zone")
+
+// R2 zone
+fill(plot(R2 + pip_offset, display=display.none), 
+     plot(R2 - pip_offset, display=display.none), 
+     color.new(input_r_color, input_transparency), "R2 Zone")
+
+// S1 zone
+fill(plot(S1 + pip_offset, display=display.none), 
+     plot(S1 - pip_offset, display=display.none), 
+     color.new(input_s_color, input_transparency), "S1 Zone")
+
+// S2 zone
+fill(plot(S2 + pip_offset, display=display.none), 
+     plot(S2 - pip_offset, display=display.none), 
+     color.new(input_s_color, input_transparency), "S2 Zone")
+
+// MidR1 zone
+fill(plot(MidR1 + pip_offset, display=display.none), 
+     plot(MidR1 - pip_offset, display=display.none), 
+     color.new(input_mid_color, input_transparency), "MidR1 Zone")
+
+// MidR2 zone
+fill(plot(MidR2 + pip_offset, display=display.none), 
+     plot(MidR2 - pip_offset, display=display.none), 
+     color.new(input_mid_color, input_transparency), "MidR2 Zone")
+
+// MidS1 zone
+fill(plot(MidS1 + pip_offset, display=display.none), 
+     plot(MidS1 - pip_offset, display=display.none), 
+     color.new(input_mid_color, input_transparency), "MidS1 Zone")
+
+// MidS2 zone
+fill(plot(MidS2 + pip_offset, display=display.none), 
+     plot(MidS2 - pip_offset, display=display.none), 
+     color.new(input_mid_color, input_transparency), "MidS2 Zone")

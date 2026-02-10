@@ -1,0 +1,700 @@
+//@version=6
+strategy("Multi-Ticker RSI + BB Strategy", overlay=true, initial_capital=200, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=true)
+
+// ========================================
+// INPUT PARAMETERS
+// ========================================
+// Account & Risk Management Settings
+accountBalance = input.float(200.0, "Account Balance (EUR/USD)", minval=1.0, tooltip="Total account balance in your trading account")
+riskPerTrade = input.float(2.0, "Risk Per Trade (%)", minval=0.1, maxval=5.0, step=0.1, tooltip="Percentage of account to risk per trade (Recommended: 1-2%)")
+roundStep = input.float(1.0, "Position Rounding Step", minval=0.01, step=0.01, tooltip="Round units down to: 1 = whole shares, 0.1 = 1 decimal, 0.01 = 2 decimals")
+applyAffordabilityToShorts = input.bool(false, "Cap Short Positions by Balance", tooltip="If false, shorts use only risk-based sizing (useful for CFD/margin trading)")
+
+// Signal Settings
+useCloseForSignals = input.bool(true, "Close-Confirmed Signals", tooltip="Use close price instead of low/high for cleaner, confirmed signals")
+
+// RSI Settings
+rsiLength = input.int(14, "RSI Length", minval=1)
+rsiOversold = input.int(30, "RSI Oversold Level (Buy)", minval=1, maxval=50)
+rsiOverbought = input.int(70, "RSI Overbought Level (Sell)", minval=50, maxval=99)
+rsiModerateOversold = input.int(25, "RSI Moderate Buy Level", minval=1, maxval=50, tooltip="RSI below this level indicates MODERATE buy strength")
+rsiModerateOverbought = input.int(75, "RSI Moderate Sell Level", minval=50, maxval=99, tooltip="RSI above this level indicates MODERATE sell strength")
+
+// Bollinger Bands Settings
+bbLength = input.int(20, "Bollinger Bands Length", minval=1)
+bbMult = input.float(2.0, "Bollinger Bands StdDev Multiplier", minval=0.1, step=0.1)
+
+// Stop Loss Settings
+slPercent = input.float(1.5, "Stop Loss Percentage", minval=0.1, maxval=10.0, step=0.1, tooltip="Percentage below Lower BB for BUY SL, or above Upper BB for SELL Stop Buy")
+
+// Take Profit Settings
+riskRewardRatio = input.float(2.5, "Risk/Reward Ratio", minval=0.5, maxval=10.0, step=0.1, tooltip="Take Profit target as multiple of risk (e.g., 2.5 = TP is 2.5x the distance to SL)")
+
+// Trailing Stop Loss Settings
+useTrailingSL = input.bool(false, "Use Trailing Stop Loss", tooltip="Move SL to breakeven at 1x risk profit, then trail at 0.5x risk distance")
+trailBreakeven = input.float(1.0, "Move to Breakeven at", minval=0.5, maxval=3.0, step=0.1, tooltip="Move SL to breakeven when profit reaches this multiple of risk")
+trailDistance = input.float(0.5, "Trailing Distance", minval=0.1, maxval=2.0, step=0.1, tooltip="Trail stop loss at this multiple of original risk distance behind price")
+
+// Volume Confirmation Settings
+useVolumeConfirmation = input.bool(true, "Use Volume Confirmation", tooltip="Require volume > average to trigger signals")
+volumeLength = input.int(20, "Volume Average Period", minval=1, tooltip="Period for calculating average volume")
+
+// Multi-Ticker Scanning Settings
+scanTimeframe = input.timeframe("60", "Scan Timeframe", tooltip="Fixed timeframe for scanning other tickers (won't change when you change chart timeframe)")
+
+// Additional Tickers to Monitor
+ticker1 = input.symbol("NVDA", "Additional Ticker 1")
+ticker2 = input.symbol("META", "Additional Ticker 2")
+ticker3 = input.symbol("MSFT", "Additional Ticker 3")
+ticker4 = input.symbol("NFLX", "Additional Ticker 4")
+ticker5 = input.symbol("AAPL", "Additional Ticker 5")
+ticker6 = input.symbol("PUBM", "Additional Ticker 6")
+
+// Table Position
+tablePosition = input.string("top_right", "Table Position", 
+     options=["top_left", "top_center", "top_right", "middle_left", 
+              "middle_center", "middle_right", "bottom_left", 
+              "bottom_center", "bottom_right"])
+
+// ========================================
+// INDICATOR CALCULATIONS (Current Chart)
+// ========================================
+// Calculate RSI
+rsiValue = ta.rsi(close, rsiLength)
+
+// Calculate Bollinger Bands
+bbBasis = ta.sma(close, bbLength)
+bbDev = bbMult * ta.stdev(close, bbLength)
+bbUpper = bbBasis + bbDev
+bbLower = bbBasis - bbDev
+
+// Calculate Volume Confirmation
+avgVolume = ta.sma(volume, volumeLength)
+volumeConfirmed = volume > avgVolume
+
+// Plot Bollinger Bands on chart
+plot(bbUpper, "Upper BB", color=color.blue, linewidth=1)
+plot(bbBasis, "Middle BB", color=color.gray, linewidth=1)
+plot(bbLower, "Lower BB", color=color.blue, linewidth=1)
+
+// ========================================
+// BUY/SELL SIGNAL LOGIC
+// ========================================
+// Choose trigger price based on user preference
+triggerLow  = useCloseForSignals ? close : low
+triggerHigh = useCloseForSignals ? close : high
+labelYBuy   = useCloseForSignals ? close : low
+labelYSell  = useCloseForSignals ? close : high
+
+// Signal thresholds
+strongBuyThreshold = 20
+moderateBuyThreshold = rsiModerateOversold
+strongSellThreshold = 80
+moderateSellThreshold = rsiModerateOverbought
+
+// STRONG signal conditions (with optional volume confirmation)
+strongBuyCondition = rsiValue < strongBuyThreshold and triggerLow <= bbLower and (useVolumeConfirmation ? volumeConfirmed : true)
+strongSellCondition = rsiValue > strongSellThreshold and triggerHigh >= bbUpper and (useVolumeConfirmation ? volumeConfirmed : true)
+
+// MODERATE signal conditions (with optional volume confirmation)
+moderateBuyCondition = rsiValue < moderateBuyThreshold and triggerLow <= bbLower and not strongBuyCondition and (useVolumeConfirmation ? volumeConfirmed : true)
+moderateSellCondition = rsiValue > moderateSellThreshold and triggerHigh >= bbUpper and not strongSellCondition and (useVolumeConfirmation ? volumeConfirmed : true)
+
+// De-duplicate signals - only trigger on NEW signals (not present on previous bar)
+newStrongBuy = strongBuyCondition and not strongBuyCondition[1]
+newModerateBuy = moderateBuyCondition and not moderateBuyCondition[1]
+
+newStrongSell = strongSellCondition and not strongSellCondition[1]
+newModerateSell = moderateSellCondition and not moderateSellCondition[1]
+
+// Alert conditions (strong AND moderate signals)
+alertBuyCondition = strongBuyCondition or moderateBuyCondition
+alertSellCondition = strongSellCondition or moderateSellCondition
+newBuySignal = newStrongBuy or newModerateBuy
+newSellSignal = newStrongSell or newModerateSell
+
+// Calculate Stop Loss values
+// For BUY: SL is 1.5% below Lower BB
+// For SELL: Stop Buy is 1.5% above Upper BB
+buySL = bbLower * (1 - slPercent / 100)
+sellStopBuy = bbUpper * (1 + slPercent / 100)
+
+// Calculate Take Profit values based on risk/reward ratio
+// For BUY: TP = entry + (entry - SL) * ratio
+// For SELL: TP = entry - (SL - entry) * ratio
+buyTP = close + (close - buySL) * riskRewardRatio
+sellTP = close - (sellStopBuy - close) * riskRewardRatio
+
+// Function to calculate signal strength based on RSI
+getSignalStrength(rsi, isBuy) =>
+    if isBuy
+        if rsi < 20
+            "STRONG"
+        else if rsi < rsiModerateOversold
+            "MODERATE"
+        else
+            "WEAK"
+    else
+        if rsi > 80
+            "STRONG"
+        else if rsi > rsiModerateOverbought
+            "MODERATE"
+        else
+            "WEAK"
+
+// Plot STRONG BUY label
+if newStrongBuy
+    label.new(bar_index, labelYBuy, "BUY STRONG", 
+         color=color.new(color.green, 0), 
+         textcolor=color.white, 
+         style=label.style_label_up, 
+         size=size.normal)
+    // Plot SL and TP lines for buy
+    line.new(bar_index, buySL, bar_index + 10, buySL, color=color.red, width=1, style=line.style_dashed)
+    line.new(bar_index, buyTP, bar_index + 10, buyTP, color=color.green, width=1, style=line.style_dashed)
+
+// Plot MODERATE BUY label (only if not already strong)
+if newModerateBuy and not strongBuyCondition
+    label.new(bar_index, labelYBuy, "BUY MOD", 
+         color=color.new(color.green, 60), 
+         textcolor=color.white, 
+         style=label.style_label_up, 
+         size=size.small)
+
+// Plot STRONG SELL label
+if newStrongSell
+    label.new(bar_index, labelYSell, "SELL STRONG", 
+         color=color.new(color.red, 0), 
+         textcolor=color.white, 
+         style=label.style_label_down, 
+         size=size.normal)
+    // Plot SL and TP lines for sell
+    line.new(bar_index, sellStopBuy, bar_index + 10, sellStopBuy, color=color.red, width=1, style=line.style_dashed)
+    line.new(bar_index, sellTP, bar_index + 10, sellTP, color=color.green, width=1, style=line.style_dashed)
+
+// Plot MODERATE SELL label (only if not already strong)
+if newModerateSell and not strongSellCondition
+    label.new(bar_index, labelYSell, "SELL MOD", 
+         color=color.new(color.red, 60), 
+         textcolor=color.white, 
+         style=label.style_label_down, 
+         size=size.small)
+
+// ========================================
+// ALERT CONDITIONS
+// ========================================
+// Calculate units for current chart
+currentRiskMoney = accountBalance * (riskPerTrade / 100)
+currentBuySL = bbLower * (1 - slPercent / 100)
+currentSellStopBuy = bbUpper * (1 + slPercent / 100)
+currentPriceDistanceBuy = math.abs(close - currentBuySL)
+currentPriceDistanceSell = math.abs(close - currentSellStopBuy)
+// Calculate units based on risk, but cap at what account can afford
+currentBuyUnitsRisk = currentPriceDistanceBuy > 0 ? currentRiskMoney / currentPriceDistanceBuy : 0
+currentBuyUnitsAffordable = close > 0 ? accountBalance / close : 0
+currentBuyUnitsRaw = math.min(currentBuyUnitsRisk, currentBuyUnitsAffordable)
+currentBuyUnits = math.floor(currentBuyUnitsRaw / roundStep) * roundStep
+
+currentSellUnitsRisk = currentPriceDistanceSell > 0 ? currentRiskMoney / currentPriceDistanceSell : 0
+// For shorts: optionally skip affordability cap (useful for CFD/margin)
+currentSellUnitsRaw = applyAffordabilityToShorts ? math.min(currentSellUnitsRisk, close > 0 ? accountBalance / close : 0) : currentSellUnitsRisk
+currentSellUnits = math.floor(currentSellUnitsRaw / roundStep) * roundStep
+
+// ========================================
+// STRATEGY EXECUTION (Current Chart)
+// ========================================
+var float longStop = na
+var float shortStop = na
+var float longRisk = na
+var float shortRisk = na
+var float longTP = na
+var float shortTP = na
+var float longTrail = na
+var float shortTrail = na
+
+if newBuySignal and strategy.position_size == 0 and currentBuyUnits > 0
+    longStop := buySL
+    longRisk := close - buySL
+    longTP := close + (longRisk * riskRewardRatio)
+    strategy.entry("Long", strategy.long, qty=currentBuyUnits)
+
+if newSellSignal and strategy.position_size == 0 and currentSellUnits > 0
+    shortStop := sellStopBuy
+    shortRisk := sellStopBuy - close
+    shortTP := close - (shortRisk * riskRewardRatio)
+    strategy.entry("Short", strategy.short, qty=currentSellUnits)
+
+if strategy.position_size == 0
+    longStop := na
+    shortStop := na
+    longRisk := na
+    shortRisk := na
+    longTP := na
+    shortTP := na
+    longTrail := na
+    shortTrail := na
+
+if strategy.position_size > 0 and not na(longStop)
+    if useTrailingSL and not na(longRisk)
+        if close - strategy.position_avg_price >= longRisk * trailBreakeven
+            longStop := math.max(longStop, strategy.position_avg_price)
+            longTrail := close - (longRisk * trailDistance)
+            longStop := math.max(longStop, longTrail)
+        strategy.exit("Long Exit", "Long", stop=longStop)
+    else
+        strategy.exit("Long Exit", "Long", stop=longStop, limit=longTP)
+
+if strategy.position_size < 0 and not na(shortStop)
+    if useTrailingSL and not na(shortRisk)
+        if strategy.position_avg_price - close >= shortRisk * trailBreakeven
+            shortStop := math.min(shortStop, strategy.position_avg_price)
+            shortTrail := close + (shortRisk * trailDistance)
+            shortStop := math.min(shortStop, shortTrail)
+        strategy.exit("Short Exit", "Short", stop=shortStop)
+    else
+        strategy.exit("Short Exit", "Short", stop=shortStop, limit=shortTP)
+
+// Alert on STRONG and MODERATE signals
+if newBuySignal
+    alert("🟢 BUY - " + syminfo.tickerid + " | RSI: " + str.tostring(rsiValue, "#.#") + " | SL: " + str.tostring(currentBuySL, "#.##") + " | TP: " + str.tostring(buyTP, "#.##") + " | Units: " + str.tostring(currentBuyUnits, "#.##"), alert.freq_once_per_bar_close)
+
+if newSellSignal
+    alert("🔴 SELL - " + syminfo.tickerid + " | RSI: " + str.tostring(rsiValue, "#.#") + " | SL: " + str.tostring(currentSellStopBuy, "#.##") + " | TP: " + str.tostring(sellTP, "#.##") + " | Units: " + str.tostring(currentSellUnits, "#.##"), alert.freq_once_per_bar_close)
+
+// ========================================
+// MULTI-TICKER MONITORING FUNCTION
+// ========================================
+// Function to check if a ticker meets buy or sell conditions
+checkTickerCondition(tickerSymbol) =>
+    // Batch all security requests into one call for performance
+    // Use fixed scan timeframe with explicit gaps and lookahead settings
+    [tickerRsi, tickerLow, tickerHigh, tickerClose, tickerBbBasis, tickerBbDev, tickerVolume, tickerAvgVolume] = request.security(tickerSymbol, scanTimeframe, 
+         [ta.rsi(close, rsiLength), low, high, close, ta.sma(close, bbLength), bbMult * ta.stdev(close, bbLength), volume, ta.sma(volume, volumeLength)],
+         gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+    
+    tickerBbLower = tickerBbBasis - tickerBbDev
+    tickerBbUpper = tickerBbBasis + tickerBbDev
+    tickerVolumeConfirmed = tickerVolume > tickerAvgVolume
+    
+    // Choose trigger price based on user preference
+    tickerTriggerLow = useCloseForSignals ? tickerClose : tickerLow
+    tickerTriggerHigh = useCloseForSignals ? tickerClose : tickerHigh
+    
+    // STRONG signal conditions (with optional volume confirmation)
+    isStrongBuy = tickerRsi < strongBuyThreshold and tickerTriggerLow <= tickerBbLower and (useVolumeConfirmation ? tickerVolumeConfirmed : true)
+    isStrongSell = tickerRsi > strongSellThreshold and tickerTriggerHigh >= tickerBbUpper and (useVolumeConfirmation ? tickerVolumeConfirmed : true)
+    
+    // MODERATE signal conditions (with optional volume confirmation)
+    isModerateBuy = tickerRsi < moderateBuyThreshold and tickerTriggerLow <= tickerBbLower and not isStrongBuy and (useVolumeConfirmation ? tickerVolumeConfirmed : true)
+    isModerateSell = tickerRsi > moderateSellThreshold and tickerTriggerHigh >= tickerBbUpper and not isStrongSell and (useVolumeConfirmation ? tickerVolumeConfirmed : true)
+    
+    // Display signals (either strong or moderate)
+    isBuy = isStrongBuy or isModerateBuy
+    isSell = isStrongSell or isModerateSell
+    
+    // Alert on both strong AND moderate signals
+    alertBuy = isStrongBuy or isModerateBuy
+    alertSell = isStrongSell or isModerateSell
+    
+    // De-duplicate: only alert on NEW signals (store previous state per ticker)
+    // Note: For multi-ticker, we return the condition and handle deduplication in main code
+    
+    // Determine signal status and strength - use alert logic for consistency
+    signalStatus = alertBuy ? "BULLISH" : (alertSell ? "BEARISH" : "NEUTRAL")
+    signalStrength = alertBuy ? getSignalStrength(tickerRsi, true) : (alertSell ? getSignalStrength(tickerRsi, false) : "-")
+
+    // Calculate Stop Loss values
+    tickerBuySL = tickerBbLower * (1 - slPercent / 100)
+    tickerSellStopBuy = tickerBbUpper * (1 + slPercent / 100)
+    suggestedSL = alertBuy ? tickerBuySL : (alertSell ? tickerSellStopBuy : na)
+    
+    // Calculate Take Profit based on suggested SL (keeps SL/TP consistent)
+    suggestedTP = alertBuy ? (tickerClose + (tickerClose - suggestedSL) * riskRewardRatio) :
+                 alertSell ? (tickerClose - (suggestedSL - tickerClose) * riskRewardRatio) :
+                 na
+    
+    // POSITION SIZING CALCULATION (Risk Management with Affordability Check)
+    // Amount to risk in money (e.g., 2% of account)
+    riskAmountMoney = accountBalance * (riskPerTrade / 100)
+    
+    // Price distance between entry and stop loss
+    priceDistance = math.abs(tickerClose - suggestedSL)
+    
+    // Calculate number of units/shares based on risk
+    unitsFromRisk = priceDistance > 0 and not na(suggestedSL) ? riskAmountMoney / priceDistance : 0
+    
+    // Calculate maximum units we can afford with account balance
+    maxAffordable = tickerClose > 0 ? accountBalance / tickerClose : 0
+    
+    // Take the minimum of risk-based units and affordable units (apply affordability cap based on alert logic)
+    unitsRaw = alertBuy ? math.min(unitsFromRisk, maxAffordable) : (applyAffordabilityToShorts ? math.min(unitsFromRisk, maxAffordable) : unitsFromRisk)
+    
+    // Round down to tradable increments
+    units = math.floor(unitsRaw / roundStep) * roundStep
+    
+    // Calculate actual Risk/Reward ratio from suggested SL/TP
+    riskDist = alertBuy ? (tickerClose - suggestedSL) : (suggestedSL - tickerClose)
+    tickerRR = (not na(riskDist) and riskDist > 0 and not na(suggestedTP)) ?
+              (alertBuy ? (suggestedTP - tickerClose) / riskDist : (tickerClose - suggestedTP) / riskDist) :
+              na
+    
+    // Return tuple: [display buy, display sell, alert buy, alert sell, signalStatus, signalStrength, RSI value, lower BB value, upper BB value, suggested SL, suggested TP, R/R ratio, units]
+    [isBuy, isSell, alertBuy, alertSell, signalStatus, signalStrength, tickerRsi, tickerBbLower, tickerBbUpper, suggestedSL, suggestedTP, tickerRR, units]
+
+// ========================================
+// CHECK CONDITIONS FOR ADDITIONAL TICKERS
+// ========================================
+[ticker1Buy, ticker1Sell, ticker1AlertBuy, ticker1AlertSell, ticker1Status, ticker1Strength, ticker1Rsi, ticker1BbLower, ticker1BbUpper, ticker1SL, ticker1TP, ticker1RR, ticker1Units] = checkTickerCondition(ticker1)
+[ticker2Buy, ticker2Sell, ticker2AlertBuy, ticker2AlertSell, ticker2Status, ticker2Strength, ticker2Rsi, ticker2BbLower, ticker2BbUpper, ticker2SL, ticker2TP, ticker2RR, ticker2Units] = checkTickerCondition(ticker2)
+[ticker3Buy, ticker3Sell, ticker3AlertBuy, ticker3AlertSell, ticker3Status, ticker3Strength, ticker3Rsi, ticker3BbLower, ticker3BbUpper, ticker3SL, ticker3TP, ticker3RR, ticker3Units] = checkTickerCondition(ticker3)
+[ticker4Buy, ticker4Sell, ticker4AlertBuy, ticker4AlertSell, ticker4Status, ticker4Strength, ticker4Rsi, ticker4BbLower, ticker4BbUpper, ticker4SL, ticker4TP, ticker4RR, ticker4Units] = checkTickerCondition(ticker4)
+[ticker5Buy, ticker5Sell, ticker5AlertBuy, ticker5AlertSell, ticker5Status, ticker5Strength, ticker5Rsi, ticker5BbLower, ticker5BbUpper, ticker5SL, ticker5TP, ticker5RR, ticker5Units] = checkTickerCondition(ticker5)
+[ticker6Buy, ticker6Sell, ticker6AlertBuy, ticker6AlertSell, ticker6Status, ticker6Strength, ticker6Rsi, ticker6BbLower, ticker6BbUpper, ticker6SL, ticker6TP, ticker6RR, ticker6Units] = checkTickerCondition(ticker6)
+
+// De-duplicate ticker alerts - track previous state per ticker
+var bool prevTicker1Buy = false
+var bool prevTicker1Sell = false
+var bool prevTicker2Buy = false
+var bool prevTicker2Sell = false
+var bool prevTicker3Buy = false
+var bool prevTicker3Sell = false
+var bool prevTicker4Buy = false
+var bool prevTicker4Sell = false
+var bool prevTicker5Buy = false
+var bool prevTicker5Sell = false
+var bool prevTicker6Buy = false
+var bool prevTicker6Sell = false
+
+// Individual ticker alerts with details
+// Note: ticker symbols from input.symbol() include exchange prefix (e.g., "NASDAQ:AAPL")
+if ticker1AlertBuy and not prevTicker1Buy
+    alert("🟢 BUY - " + ticker1 + " | RSI: " + str.tostring(ticker1Rsi, "#.#") + " | SL: " + str.tostring(ticker1SL, "#.##") + " | TP: " + str.tostring(ticker1TP, "#.##") + " | Units: " + str.tostring(ticker1Units, "#.##"), alert.freq_once_per_bar_close)
+if ticker1AlertSell and not prevTicker1Sell
+    alert("🔴 SELL - " + ticker1 + " | RSI: " + str.tostring(ticker1Rsi, "#.#") + " | SL: " + str.tostring(ticker1SL, "#.##") + " | TP: " + str.tostring(ticker1TP, "#.##") + " | Units: " + str.tostring(ticker1Units, "#.##"), alert.freq_once_per_bar_close)
+prevTicker1Buy := ticker1AlertBuy
+prevTicker1Sell := ticker1AlertSell
+
+if ticker2AlertBuy and not prevTicker2Buy
+    alert("🟢 BUY - " + ticker2 + " | RSI: " + str.tostring(ticker2Rsi, "#.#") + " | SL: " + str.tostring(ticker2SL, "#.##") + " | TP: " + str.tostring(ticker2TP, "#.##") + " | Units: " + str.tostring(ticker2Units, "#.##"), alert.freq_once_per_bar_close)
+if ticker2AlertSell and not prevTicker2Sell
+    alert("🔴 SELL - " + ticker2 + " | RSI: " + str.tostring(ticker2Rsi, "#.#") + " | SL: " + str.tostring(ticker2SL, "#.##") + " | TP: " + str.tostring(ticker2TP, "#.##") + " | Units: " + str.tostring(ticker2Units, "#.##"), alert.freq_once_per_bar_close)
+prevTicker2Buy := ticker2AlertBuy
+prevTicker2Sell := ticker2AlertSell
+
+if ticker3AlertBuy and not prevTicker3Buy
+    alert("🟢 BUY - " + ticker3 + " | RSI: " + str.tostring(ticker3Rsi, "#.#") + " | SL: " + str.tostring(ticker3SL, "#.##") + " | TP: " + str.tostring(ticker3TP, "#.##") + " | Units: " + str.tostring(ticker3Units, "#.##"), alert.freq_once_per_bar_close)
+if ticker3AlertSell and not prevTicker3Sell
+    alert("🔴 SELL - " + ticker3 + " | RSI: " + str.tostring(ticker3Rsi, "#.#") + " | SL: " + str.tostring(ticker3SL, "#.##") + " | TP: " + str.tostring(ticker3TP, "#.##") + " | Units: " + str.tostring(ticker3Units, "#.##"), alert.freq_once_per_bar_close)
+prevTicker3Buy := ticker3AlertBuy
+prevTicker3Sell := ticker3AlertSell
+
+if ticker4AlertBuy and not prevTicker4Buy
+    alert("🟢 BUY - " + ticker4 + " | RSI: " + str.tostring(ticker4Rsi, "#.#") + " | SL: " + str.tostring(ticker4SL, "#.##") + " | TP: " + str.tostring(ticker4TP, "#.##") + " | Units: " + str.tostring(ticker4Units, "#.##"), alert.freq_once_per_bar_close)
+if ticker4AlertSell and not prevTicker4Sell
+    alert("🔴 SELL - " + ticker4 + " | RSI: " + str.tostring(ticker4Rsi, "#.#") + " | SL: " + str.tostring(ticker4SL, "#.##") + " | TP: " + str.tostring(ticker4TP, "#.##") + " | Units: " + str.tostring(ticker4Units, "#.##"), alert.freq_once_per_bar_close)
+prevTicker4Buy := ticker4AlertBuy
+prevTicker4Sell := ticker4AlertSell
+
+if ticker5AlertBuy and not prevTicker5Buy
+    alert("🟢 BUY - " + ticker5 + " | RSI: " + str.tostring(ticker5Rsi, "#.#") + " | SL: " + str.tostring(ticker5SL, "#.##") + " | TP: " + str.tostring(ticker5TP, "#.##") + " | Units: " + str.tostring(ticker5Units, "#.##"), alert.freq_once_per_bar_close)
+if ticker5AlertSell and not prevTicker5Sell
+    alert("🔴 SELL - " + ticker5 + " | RSI: " + str.tostring(ticker5Rsi, "#.#") + " | SL: " + str.tostring(ticker5SL, "#.##") + " | TP: " + str.tostring(ticker5TP, "#.##") + " | Units: " + str.tostring(ticker5Units, "#.##"), alert.freq_once_per_bar_close)
+prevTicker5Buy := ticker5AlertBuy
+prevTicker5Sell := ticker5AlertSell
+
+if ticker6AlertBuy and not prevTicker6Buy
+    alert("🟢 BUY - " + ticker6 + " | RSI: " + str.tostring(ticker6Rsi, "#.#") + " | SL: " + str.tostring(ticker6SL, "#.##") + " | TP: " + str.tostring(ticker6TP, "#.##") + " | Units: " + str.tostring(ticker6Units, "#.##"), alert.freq_once_per_bar_close)
+if ticker6AlertSell and not prevTicker6Sell
+    alert("🔴 SELL - " + ticker6 + " | RSI: " + str.tostring(ticker6Rsi, "#.#") + " | SL: " + str.tostring(ticker6SL, "#.##") + " | TP: " + str.tostring(ticker6TP, "#.##") + " | Units: " + str.tostring(ticker6Units, "#.##"), alert.freq_once_per_bar_close)
+prevTicker6Buy := ticker6AlertBuy
+prevTicker6Sell := ticker6AlertSell
+
+
+// ========================================
+// CREATE STATUS TABLE
+// ========================================
+// Create table to display ticker status (6 tickers + header = 8 rows, 9 columns)
+var table statusTable = table.new(position=tablePosition, columns=9, rows=8, 
+     bgcolor=color.new(color.black, 85), 
+     border_width=1, 
+     border_color=color.new(color.gray, 50))
+
+// Only update table on the last bar to avoid repainting
+if barstate.islast
+    // Table Headers
+    table.cell(statusTable, 0, 0, "Ticker", 
+         bgcolor=color.new(color.gray, 70), 
+         text_color=color.white, 
+         text_size=size.normal)
+    table.cell(statusTable, 1, 0, "Status", 
+         bgcolor=color.new(color.gray, 70), 
+         text_color=color.white, 
+         text_size=size.normal)
+    table.cell(statusTable, 2, 0, "Strength", 
+         bgcolor=color.new(color.gray, 70), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 3, 0, "RSI", 
+         bgcolor=color.new(color.gray, 70), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 4, 0, "BB Range", 
+         bgcolor=color.new(color.gray, 70), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 5, 0, "Suggested SL", 
+         bgcolor=color.new(color.gray, 70), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 6, 0, "Suggested TP", 
+         bgcolor=color.new(color.gray, 70), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 7, 0, "R/R", 
+         bgcolor=color.new(color.gray, 70), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 8, 0, "Units", 
+         bgcolor=color.new(color.gray, 70), 
+         text_color=color.white, 
+         text_size=size.small)
+    
+    // Current Chart Status - show both strong and moderate signals
+    currentHasSignal = strongBuyCondition or strongSellCondition or moderateBuyCondition or moderateSellCondition
+    currentIsStrong = strongBuyCondition or strongSellCondition
+    currentIsBuy = strongBuyCondition or moderateBuyCondition
+    currentIsSell = strongSellCondition or moderateSellCondition
+    
+    currentStatus = currentHasSignal ? (currentIsBuy ? "BULLISH" : "BEARISH") : "NEUTRAL"
+    currentStrength = currentHasSignal ? (currentIsBuy ? getSignalStrength(rsiValue, true) : getSignalStrength(rsiValue, false)) : "-"
+    currentColor = currentIsBuy ? color.green : (currentIsSell ? color.red : color.gray)
+    currentSL = currentHasSignal and currentIsBuy ? buySL : (currentHasSignal and currentIsSell ? sellStopBuy : na)
+    currentTP = currentHasSignal and currentIsBuy ? buyTP : (currentHasSignal and currentIsSell ? sellTP : na)
+    
+    // Calculate R/R ratio
+    currentRR = na(currentSL) or na(currentTP) ? na : (currentIsBuy ? (buyTP - close) / (close - buySL) : (close - sellTP) / (sellStopBuy - close))
+    
+    // Calculate units for current chart (use already calculated values with affordability check)
+    currentTableUnits = currentIsBuy ? currentBuyUnits : (currentIsSell ? currentSellUnits : 0)
+    
+    table.cell(statusTable, 0, 1, syminfo.ticker, 
+         text_color=color.white, 
+         text_size=size.normal)
+    table.cell(statusTable, 1, 1, currentStatus, 
+         bgcolor=color.new(currentColor, 70), 
+         text_color=currentColor, 
+         text_size=size.normal)
+    table.cell(statusTable, 2, 1, currentStrength, 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 3, 1, str.tostring(rsiValue, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 4, 1, str.tostring(bbLower, "#.#") + " - " + str.tostring(bbUpper, "#.#"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 5, 1, na(currentSL) ? "-" : str.tostring(currentSL, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 6, 1, na(currentTP) ? "-" : str.tostring(currentTP, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 7, 1, na(currentRR) ? "-" : str.tostring(currentRR, "#.#"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 8, 1, currentHasSignal ? str.tostring(currentTableUnits, "#.##") : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    
+    // Ticker 1 Status - show both strong and moderate
+    ticker1Color = ticker1AlertBuy ? color.green : (ticker1AlertSell ? color.red : color.gray)
+    table.cell(statusTable, 0, 2, ticker1, 
+         text_color=color.white, 
+         text_size=size.normal)
+    table.cell(statusTable, 1, 2, ticker1Status, 
+         bgcolor=color.new(ticker1Color, 70), 
+         text_color=ticker1Color, 
+         text_size=size.normal)
+    table.cell(statusTable, 2, 2, ticker1Strength, 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 3, 2, str.tostring(ticker1Rsi, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 4, 2, str.tostring(ticker1BbLower, "#.#") + " - " + str.tostring(ticker1BbUpper, "#.#"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 5, 2, na(ticker1SL) ? "-" : str.tostring(ticker1SL, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 6, 2, na(ticker1TP) ? "-" : str.tostring(ticker1TP, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 7, 2, (ticker1AlertBuy or ticker1AlertSell) ? (na(ticker1RR) ? "-" : str.tostring(ticker1RR, "#.#")) : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 8, 2, (ticker1AlertBuy or ticker1AlertSell) ? str.tostring(ticker1Units, "#.##") : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    
+    // Ticker 2 Status - use alert logic for consistency
+    ticker2Color = ticker2AlertBuy ? color.green : (ticker2AlertSell ? color.red : color.gray)
+    table.cell(statusTable, 0, 3, ticker2, 
+         text_color=color.white, 
+         text_size=size.normal)
+    table.cell(statusTable, 1, 3, ticker2Status, 
+         bgcolor=color.new(ticker2Color, 70), 
+         text_color=ticker2Color, 
+         text_size=size.normal)
+    table.cell(statusTable, 2, 3, ticker2Strength, 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 3, 3, str.tostring(ticker2Rsi, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 4, 3, str.tostring(ticker2BbLower, "#.#") + " - " + str.tostring(ticker2BbUpper, "#.#"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 5, 3, na(ticker2SL) ? "-" : str.tostring(ticker2SL, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 6, 3, na(ticker2TP) ? "-" : str.tostring(ticker2TP, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 7, 3, (ticker2AlertBuy or ticker2AlertSell) ? (na(ticker2RR) ? "-" : str.tostring(ticker2RR, "#.#")) : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 8, 3, (ticker2AlertBuy or ticker2AlertSell) ? str.tostring(ticker2Units, "#.##") : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    
+    // Ticker 3 Status - use alert logic for consistency
+    ticker3Color = ticker3AlertBuy ? color.green : (ticker3AlertSell ? color.red : color.gray)
+    table.cell(statusTable, 0, 4, ticker3, 
+         text_color=color.white, 
+         text_size=size.normal)
+    table.cell(statusTable, 1, 4, ticker3Status, 
+         bgcolor=color.new(ticker3Color, 70), 
+         text_color=ticker3Color, 
+         text_size=size.normal)
+    table.cell(statusTable, 2, 4, ticker3Strength, 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 3, 4, str.tostring(ticker3Rsi, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 4, 4, str.tostring(ticker3BbLower, "#.#") + " - " + str.tostring(ticker3BbUpper, "#.#"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 5, 4, na(ticker3SL) ? "-" : str.tostring(ticker3SL, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 6, 4, na(ticker3TP) ? "-" : str.tostring(ticker3TP, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 7, 4, (ticker3AlertBuy or ticker3AlertSell) ? (na(ticker3RR) ? "-" : str.tostring(ticker3RR, "#.#")) : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 8, 4, (ticker3AlertBuy or ticker3AlertSell) ? str.tostring(ticker3Units, "#.##") : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    
+    // Ticker 4 Status - use alert logic for consistency
+    ticker4Color = ticker4AlertBuy ? color.green : (ticker4AlertSell ? color.red : color.gray)
+    table.cell(statusTable, 0, 5, ticker4, 
+         text_color=color.white, 
+         text_size=size.normal)
+    table.cell(statusTable, 1, 5, ticker4Status, 
+         bgcolor=color.new(ticker4Color, 70), 
+         text_color=ticker4Color, 
+         text_size=size.normal)
+    table.cell(statusTable, 2, 5, ticker4Strength, 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 3, 5, str.tostring(ticker4Rsi, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 4, 5, str.tostring(ticker4BbLower, "#.#") + " - " + str.tostring(ticker4BbUpper, "#.#"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 5, 5, na(ticker4SL) ? "-" : str.tostring(ticker4SL, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 6, 5, na(ticker4TP) ? "-" : str.tostring(ticker4TP, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 7, 5, (ticker4AlertBuy or ticker4AlertSell) ? (na(ticker4RR) ? "-" : str.tostring(ticker4RR, "#.#")) : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 8, 5, (ticker4AlertBuy or ticker4AlertSell) ? str.tostring(ticker4Units, "#.##") : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    
+    // Ticker 5 Status - use alert logic for consistency
+    ticker5Color = ticker5AlertBuy ? color.green : (ticker5AlertSell ? color.red : color.gray)
+    table.cell(statusTable, 0, 6, ticker5, 
+         text_color=color.white, 
+         text_size=size.normal)
+    table.cell(statusTable, 1, 6, ticker5Status, 
+         bgcolor=color.new(ticker5Color, 70), 
+         text_color=ticker5Color, 
+         text_size=size.normal)
+    table.cell(statusTable, 2, 6, ticker5Strength, 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 3, 6, str.tostring(ticker5Rsi, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 4, 6, str.tostring(ticker5BbLower, "#.#") + " - " + str.tostring(ticker5BbUpper, "#.#"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 5, 6, na(ticker5SL) ? "-" : str.tostring(ticker5SL, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 6, 6, na(ticker5TP) ? "-" : str.tostring(ticker5TP, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 7, 6, (ticker5AlertBuy or ticker5AlertSell) ? (na(ticker5RR) ? "-" : str.tostring(ticker5RR, "#.#")) : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 8, 6, (ticker5AlertBuy or ticker5AlertSell) ? str.tostring(ticker5Units, "#.##") : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    
+    // Ticker 6 Status
+    ticker6Color = ticker6AlertBuy ? color.green : (ticker6AlertSell ? color.red : color.gray)
+    table.cell(statusTable, 0, 7, ticker6, 
+         text_color=color.white, 
+         text_size=size.normal)
+    table.cell(statusTable, 1, 7, ticker6Status, 
+         bgcolor=color.new(ticker6Color, 70), 
+         text_color=ticker6Color, 
+         text_size=size.normal)
+    table.cell(statusTable, 2, 7, ticker6Strength, 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 3, 7, str.tostring(ticker6Rsi, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 4, 7, str.tostring(ticker6BbLower, "#.#") + " - " + str.tostring(ticker6BbUpper, "#.#"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 5, 7, na(ticker6SL) ? "-" : str.tostring(ticker6SL, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 6, 7, na(ticker6TP) ? "-" : str.tostring(ticker6TP, "#.##"), 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 7, 7, (ticker6AlertBuy or ticker6AlertSell) ? (na(ticker6RR) ? "-" : str.tostring(ticker6RR, "#.#")) : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    table.cell(statusTable, 8, 7, (ticker6AlertBuy or ticker6AlertSell) ? str.tostring(ticker6Units, "#.##") : "-", 
+         text_color=color.white, 
+         text_size=size.small)
+    
+
+// ========================================
+// BACKGROUND HIGHLIGHT (OPTIONAL)
+// ========================================
+// Flash background only on NEW signals for immediate visual feedback
+bgcolor(newBuySignal ? color.new(color.green, 90) : (newSellSignal ? color.new(color.red, 90) : na), title="Signal Background")

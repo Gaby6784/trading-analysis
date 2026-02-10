@@ -1,0 +1,31 @@
+# Core Data and Analysis Libraries
+yfinance>=0.2.36
+pandas>=2.0.0
+pandas-ta>=0.3.14b0
+
+# News and Web Scraping
+newsapi-python>=0.2.7
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+
+# Output Formatting
+prettytable>=3.9.0
+
+# Web Framework
+Flask>=3.0.0
+flask-cors>=4.0.0
+gunicorn>=21.2.0
+
+# Scheduling and Timezone
+schedule>=1.2.0
+pytz>=2023.3
+
+# Optional: AI Integration (uncomment if using)
+# openai>=1.0.0
+# google-generativeai>=0.3.0
+
+# Utility Libraries
+python-dateutil>=2.8.2
+scipy>=1.11.0
+matplotlib>=3.7.0
+tabulate>=0.9.0

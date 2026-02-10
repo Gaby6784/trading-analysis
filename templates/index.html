@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Analysis Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            line-height: 1.6;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+
+        .alerts-section {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .alert-item {
+            background: linear-gradient(135deg, #f6d365 0%, #fda085 100%);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            color: white;
+        }
+
+        .alert-ticker {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .ticker-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .ticker-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+        }
+
+        .ticker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .ticker-name {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .score-badge {
+            font-size: 1.3em;
+            font-weight: bold;
+            padding: 8px 16px;
+            border-radius: 20px;
+        }
+
+        .category-STRONG_BUY { background: #10b981; color: white; }
+        .category-BUY { background: #34d399; color: white; }
+        .category-WATCH { background: #fbbf24; color: white; }
+        .category-AVOID { background: #ef4444; color: white; }
+        .category-NEUTRAL { background: #6b7280; color: white; }
+
+        .ticker-details {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .detail-item {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+
+        .detail-label {
+            color: #666;
+            font-size: 0.85em;
+            margin-bottom: 3px;
+        }
+
+        .detail-value {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .news-section {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 2px solid #f0f0f0;
+        }
+
+        .news-prediction {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+
+        .direction-BULLISH { color: #10b981; }
+        .direction-BEARISH { color: #ef4444; }
+        .direction-NEUTRAL { color: #6b7280; }
+
+        .alignment-badge {
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .alignment-STRONG_CONFLUENCE { background: #d1fae5; color: #065f46; }
+        .alignment-CONFLUENCE { background: #dbeafe; color: #1e40af; }
+        .alignment-NEUTRAL { background: #f3f4f6; color: #374151; }
+        .alignment-DIVERGENCE { background: #fee2e2; color: #991b1b; }
+
+        .timestamp {
+            color: #999;
+            font-size: 0.85em;
+            margin-top: 10px;
+            text-align: center;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: white;
+            font-size: 1.2em;
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top: 3px solid white;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Trading Analysis Dashboard</h1>
+            <p class="subtitle">Real-time premarket analysis with news predictions</p>
+            <div class="controls">
+                <button id="refreshBtn">🔄 Refresh Latest</button>
+                <button id="runAnalysisBtn">▶️ Run Analysis Now</button>
+                <button id="viewAlertsBtn">🔔 View Alerts</button>
+            </div>
+        </header>
+
+        <div class="status" id="statusSection">
+            <h2>📈 System Status</h2>
+            <div class="status-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalRecords">-</div>
+                    <div class="stat-label">Total Analyses</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="uniqueTickers">-</div>
+                    <div class="stat-label">Tracked Tickers</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="alerts24h">-</div>
+                    <div class="stat-label">Alerts (24h)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="lastUpdate">-</div>
+                    <div class="stat-label">Last Analysis</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="alerts-section" id="alertsSection" style="display: none;">
+            <h2>🔔 High-Confidence Signals (Last 24h)</h2>
+            <div id="alertsList"></div>
+        </div>
+
+        <div id="loadingSection" class="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Running analysis...</p>
+        </div>
+
+        <div id="errorSection" class="error" style="display: none;"></div>
+
+        <div id="resultsSection">
+            <h2 style="color: white; margin-bottom: 20px;">Latest Analysis Results</h2>
+            <div class="results-grid" id="resultsGrid"></div>
+        </div>
+    </div>
+
+    <script>
+        // API base URL
+        const API_BASE = window.location.origin;
+
+        // Load stats on page load
+        loadStats();
+        loadLatestResults();
+
+        // Auto-refresh every 5 minutes
+        setInterval(() => {
+            loadStats();
+            loadLatestResults();
+        }, 5 * 60 * 1000);
+
+        // Button handlers
+        document.getElementById('refreshBtn').addEventListener('click', () => {
+            loadStats();
+            loadLatestResults();
+        });
+
+        document.getElementById('runAnalysisBtn').addEventListener('click', runAnalysis);
+        document.getElementById('viewAlertsBtn').addEventListener('click', toggleAlerts);
+
+        async function loadStats() {
+            try {
+                const response = await fetch(`${API_BASE}/api/stats`);
+                const data = await response.json();
+
+                if (data.success) {
+                    document.getElementById('totalRecords').textContent = data.stats.total_records;
+                    document.getElementById('uniqueTickers').textContent = data.stats.unique_tickers;
+                    document.getElementById('alerts24h').textContent = data.stats.alerts_24h;
+                    
+                    if (data.stats.latest_analysis) {
+                        const date = new Date(data.stats.latest_analysis);
+                        document.getElementById('lastUpdate').textContent = date.toLocaleTimeString();
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        async function loadLatestResults() {
+            try {
+                const response = await fetch(`${API_BASE}/api/latest`);
+                const data = await response.json();
+
+                if (data.success) {
+                    displayResults(data.results);
+                } else {
+                    showError('Failed to load results: ' + data.error);
+                }
+            } catch (error) {
+                showError('Error loading results: ' + error.message);
+            }
+        }
+
+        async function runAnalysis() {
+            const btn = document.getElementById('runAnalysisBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Running...';
+            
+            document.getElementById('loadingSection').style.display = 'block';
+            document.getElementById('errorSection').style.display = 'none';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/analyze`);
+                const data = await response.json();
+
+                if (data.success) {
+                    displayResults(data.results);
+                    loadStats();
+                } else {
+                    showError('Analysis failed: ' + data.error);
+                }
+            } catch (error) {
+                showError('Error running analysis: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '▶️ Run Analysis Now';
+                document.getElementById('loadingSection').style.display = 'none';
+            }
+        }
+
+        async function toggleAlerts() {
+            const alertsSection = document.getElementById('alertsSection');
+            
+            if (alertsSection.style.display === 'none') {
+                // Load and show alerts
+                try {
+                    const response = await fetch(`${API_BASE}/api/alerts`);
+                    const data = await response.json();
+
+                    if (data.success) {
+                        displayAlerts(data.alerts);
+                        alertsSection.style.display = 'block';
+                    }
+                } catch (error) {
+                    showError('Error loading alerts: ' + error.message);
+                }
+            } else {
+                alertsSection.style.display = 'none';
+            }
+        }
+
+        function displayResults(results) {
+            const grid = document.getElementById('resultsGrid');
+            grid.innerHTML = '';
+
+            if (!results || results.length === 0) {
+                grid.innerHTML = '<p style="color: white;">No results available</p>';
+                return;
+            }
+
+            results.forEach(result => {
+                if (result.error) {
+                    return; // Skip errored tickers
+                }
+
+                const card = document.createElement('div');
+                card.className = 'ticker-card';
+                
+                card.innerHTML = `
+                    <div class="ticker-header">
+                        <span class="ticker-name">${result.ticker}</span>
+                        <span class="score-badge category-${result.category}">${result.score.toFixed(0)}</span>
+                    </div>
+                    
+                    <div class="ticker-details">
+                        <div class="detail-item">
+                            <div class="detail-label">Category</div>
+                            <div class="detail-value">${result.category}</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Price</div>
+                            <div class="detail-value">$${result.price ? result.price.toFixed(2) : 'N/A'}</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">RSI</div>
+                            <div class="detail-value">${result.rsi ? result.rsi.toFixed(1) : 'N/A'}</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Trend</div>
+                            <div class="detail-value">${result.trend || 'N/A'}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="news-section">
+                        <div class="news-prediction">
+                            <span class="direction-${result.news_direction}">${result.news_direction}</span>
+                            <span>(${result.news_confidence.toFixed(0)}%)</span>
+                            <span class="alignment-badge alignment-${result.alignment.replace(' ', '_')}">${result.alignment}</span>
+                        </div>
+                        <div style="font-size: 0.9em; color: #666;">
+                            Expected: ${result.expected_move || 'N/A'}
+                        </div>
+                    </div>
+                    
+                    <div class="timestamp">
+                        ${new Date(result.timestamp).toLocaleString()}
+                    </div>
+                `;
+                
+                grid.appendChild(card);
+            });
+        }
+
+        function displayAlerts(alerts) {
+            const list = document.getElementById('alertsList');
+            list.innerHTML = '';
+
+            if (!alerts || alerts.length === 0) {
+                list.innerHTML = '<p>No high-confidence signals in the last 24 hours</p>';
+                return;
+            }
+
+            alerts.forEach(alert => {
+                const item = document.createElement('div');
+                item.className = 'alert-item';
+                item.innerHTML = `
+                    <span class="alert-ticker">${alert.ticker}</span>
+                    <span> - Score: ${alert.score.toFixed(0)} (${alert.category})</span>
+                    <span> | News: ${alert.news_direction} ${alert.news_confidence.toFixed(0)}%</span>
+                    <span> | ${new Date(alert.timestamp).toLocaleString()}</span>
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        function showError(message) {
+            const errorSection = document.getElementById('errorSection');
+            errorSection.textContent = message;
+            errorSection.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

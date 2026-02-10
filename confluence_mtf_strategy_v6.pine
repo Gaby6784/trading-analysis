@@ -1,0 +1,535 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © YourTradingViewUsername
+
+//@version=6
+strategy("Confluence MTF Strategy (Tech Basket) v6", 
+         shorttitle="Confluence MTF v6",
+         overlay=true,
+         initial_capital=200,
+         currency=currency.USD,
+         default_qty_type=strategy.cash,
+         pyramiding=0,
+         calc_on_every_tick=false,
+         calc_on_order_fills=false,
+         commission_type=strategy.commission.percent,
+         commission_value=0.1)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+// --- Timeframes ---
+string htfInput = input.timeframe("W", "HTF Timeframe (Trend)", group="Timeframes")
+string mtfInput = input.timeframe("D", "MTF Timeframe (Setup)", group="Timeframes")
+
+// --- Ticker Selection ---
+bool tradeChartOnly = input.bool(true, "Trade Only Chart Symbol", group="Symbol Selection")
+string selectedSymbol = input.symbol("NASDAQ:NVDA", "Selected Symbol (if not chart only)", group="Symbol Selection")
+
+// --- Moving Averages ---
+int emaLen = input.int(20, "EMA Fast Length", minval=1, group="Moving Averages")
+int smaLen = input.int(200, "SMA Long Length", minval=1, group="Moving Averages")
+
+// --- RSI ---
+int rsiLen = input.int(14, "RSI Length", minval=1, group="RSI")
+float rsiOB = input.float(70, "RSI Overbought", minval=50, maxval=100, group="RSI")
+float rsiOS = input.float(30, "RSI Oversold", minval=0, maxval=50, group="RSI")
+
+// --- MACD ---
+int macdFast = input.int(12, "MACD Fast", minval=1, group="MACD")
+int macdSlow = input.int(26, "MACD Slow", minval=1, group="MACD")
+int macdSignal = input.int(9, "MACD Signal", minval=1, group="MACD")
+
+// --- Bollinger Bands ---
+int bbLen = input.int(20, "BB Length", minval=1, group="Bollinger Bands")
+float bbMult = input.float(2.0, "BB StdDev Multiplier", minval=0.5, step=0.1, group="Bollinger Bands")
+
+// --- Squeeze Detection ---
+int squeezeLookback = input.int(100, "Squeeze Lookback (bars)", minval=20, group="Squeeze")
+float squeezePercentile = input.float(20, "Bandwidth Percentile Threshold", minval=0, maxval=50, group="Squeeze")
+
+// --- Pivot Structure ---
+int pivotLeft = input.int(5, "Pivot Left Bars", minval=1, group="Market Structure")
+int pivotRight = input.int(5, "Pivot Right Bars", minval=1, group="Market Structure")
+
+// --- Risk Management ---
+float riskPct = input.float(1.0, "Risk Per Trade (%)", minval=0.1, maxval=10, step=0.1, group="Risk Management")
+int atrLen = input.int(14, "ATR Length", minval=1, group="Risk Management")
+float stopMult = input.float(2.0, "ATR Stop Multiplier", minval=0.5, step=0.1, group="Risk Management")
+float targetR = input.float(2.0, "Risk:Reward Ratio", minval=1, step=0.5, group="Risk Management")
+
+// --- Confluence ---
+int confluenceThreshold = input.int(4, "Confluence Score Threshold", minval=1, maxval=7, group="Confluence")
+bool enableHTFFilter = input.bool(true, "Require HTF Trend Alignment", group="Confluence")
+
+// --- Volume ---
+int volSmaLen = input.int(20, "Volume SMA Length", minval=1, group="Volume")
+float volSpikeMult = input.float(1.5, "Volume Spike Multiplier", minval=1, step=0.1, group="Volume")
+
+// --- EMA Pullback Zone ---
+float emaPullbackPct = input.float(2.0, "EMA Pullback Zone (%)", minval=0.5, maxval=10, step=0.5, group="Setup Detection")
+
+// --- Dashboard ---
+bool showDashboard = input.bool(true, "Show Multi-Ticker Dashboard", group="Dashboard")
+string dashPosition = input.string("top_right", "Dashboard Position", options=["top_right", "top_left", "bottom_right", "bottom_left"], group="Dashboard")
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+// Tech basket tickers
+var string[] TICKERS = array.from("NASDAQ:NVDA", "NASDAQ:NFLX", "NASDAQ:MSFT", "NASDAQ:META", "NASDAQ:AAPL", "NASDAQ:PUBM")
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+// Calculate trend based on EMA/SMA relationship
+// Returns: 1 = bullish, -1 = bearish, 0 = neutral
+calcTrend(float closePrice, float emaVal, float smaVal) =>
+    bullish = closePrice > smaVal and emaVal > smaVal
+    bearish = closePrice < smaVal and emaVal < smaVal
+    bullish ? 1 : bearish ? -1 : 0
+
+// Check if price is in EMA pullback zone
+inPullbackZone(float closePrice, float emaVal, float zonePct) =>
+    zoneHigh = emaVal * (1 + zonePct/100)
+    zoneLow = emaVal * (1 - zonePct/100)
+    closePrice >= zoneLow and closePrice <= zoneHigh
+
+// Calculate Bollinger Bandwidth percentile
+calcBBSqueeze(float bandwidth, int lookback, float threshold) =>
+    var float[] bwHistory = array.new_float(0)
+    if not na(bandwidth)
+        array.push(bwHistory, bandwidth)
+        if array.size(bwHistory) > lookback
+            array.shift(bwHistory)
+    
+    if array.size(bwHistory) >= lookback
+        sorted = array.copy(bwHistory)
+        array.sort(sorted)
+        percentileIdx = math.floor(array.size(sorted) * threshold / 100)
+        percentileValue = array.get(sorted, percentileIdx)
+        bandwidth <= percentileValue
+    else
+        false
+
+// Detect pivot highs and lows
+getPivotHigh(int leftBars, int rightBars) =>
+    ta.pivothigh(high, leftBars, rightBars)
+
+getPivotLow(int leftBars, int rightBars) =>
+    ta.pivotlow(low, leftBars, rightBars)
+
+// ============================================================================
+// CURRENT SYMBOL CALCULATIONS (LTF - Chart Timeframe)
+// ============================================================================
+
+// --- Moving Averages ---
+float emaFast = ta.ema(close, emaLen)
+float smaLong = ta.sma(close, smaLen)
+
+// --- RSI ---
+float rsi = ta.rsi(close, rsiLen)
+
+// --- MACD ---
+[macdLine, signalLine, macdHist] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+// --- Bollinger Bands ---
+float bbBasis = ta.sma(close, bbLen)
+float bbDev = ta.stdev(close, bbLen)
+float bbUpper = bbBasis + bbMult * bbDev
+float bbLower = bbBasis - bbMult * bbDev
+float bbWidth = (bbUpper - bbLower) / bbBasis * 100
+
+// --- ATR ---
+float atr = ta.atr(atrLen)
+
+// --- Volume ---
+float volSma = ta.sma(volume, volSmaLen)
+bool volSpike = volume > volSma * volSpikeMult
+
+// --- OBV ---
+float obv = ta.cum(math.sign(ta.change(close)) * volume)
+float obvSma = ta.sma(obv, 20)
+bool obvRising = obv > obvSma
+
+// --- Pivots ---
+float pivotH = getPivotHigh(pivotLeft, pivotRight)
+float pivotL = getPivotLow(pivotLeft, pivotRight)
+
+var float lastPivotHigh = na
+var float lastPivotLow = na
+
+if not na(pivotH)
+    lastPivotHigh := pivotH
+if not na(pivotL)
+    lastPivotLow := pivotL
+
+// --- BB Squeeze Detection ---
+bool isSqueeze = calcBBSqueeze(bbWidth, squeezeLookback, squeezePercentile)
+bool squeezeChanged = ta.change(isSqueeze)
+
+// ============================================================================
+// MULTI-TIMEFRAME DATA (HTF and MTF)
+// ============================================================================
+
+// HTF Data (Trend Filter)
+[htfClose, htfEma, htfSma] = request.security(syminfo.tickerid, htfInput, [close, ta.ema(close, emaLen), ta.sma(close, smaLen)], lookahead=barmerge.lookahead_off)
+int htfTrend = calcTrend(htfClose, htfEma, htfSma)
+
+// MTF Data (Setup Layer)
+[mtfClose, mtfEma, mtfSma, mtfAtr] = request.security(syminfo.tickerid, mtfInput, [close, ta.ema(close, emaLen), ta.sma(close, smaLen), ta.atr(atrLen)], lookahead=barmerge.lookahead_off)
+int mtfTrend = calcTrend(mtfClose, mtfEma, mtfSma)
+bool mtfInPullback = inPullbackZone(mtfClose, mtfEma, emaPullbackPct)
+
+// ============================================================================
+// RSI DIVERGENCE DETECTION (Pivot-Based)
+// ============================================================================
+
+// Store pivot prices and RSI values
+var float lastPivotHighPrice = na
+var float lastPivotHighRSI = na
+var float lastPivotLowPrice = na
+var float lastPivotLowRSI = na
+
+if not na(pivotH)
+    lastPivotHighPrice := high[pivotRight]
+    lastPivotHighRSI := rsi[pivotRight]
+
+if not na(pivotL)
+    lastPivotLowPrice := low[pivotRight]
+    lastPivotLowRSI := rsi[pivotRight]
+
+// Bullish divergence: price lower low but RSI higher low
+bool bullishDiv = false
+if not na(pivotL) and not na(lastPivotLowPrice) and not na(lastPivotLowRSI)
+    if low[pivotRight] < lastPivotLowPrice and rsi[pivotRight] > lastPivotLowRSI
+        bullishDiv := true
+
+// Bearish divergence: price higher high but RSI lower high
+bool bearishDiv = false
+if not na(pivotH) and not na(lastPivotHighPrice) and not na(lastPivotHighRSI)
+    if high[pivotRight] > lastPivotHighPrice and rsi[pivotRight] < lastPivotHighRSI
+        bearishDiv := true
+
+// ============================================================================
+// SIGNAL DETECTION (LTF Triggers)
+// ============================================================================
+
+// Long triggers (all should be momentary events, not persistent states)
+bool macdCrossUp = ta.crossover(macdLine, signalLine)
+bool rsiCross50Up = ta.crossover(rsi, 50)
+bool breakPivotHigh = not na(lastPivotHigh) and ta.crossover(close, lastPivotHigh)
+
+bool longTrigger = macdCrossUp or rsiCross50Up or breakPivotHigh
+
+// Short triggers (all should be momentary events, not persistent states)
+bool macdCrossDown = ta.crossunder(macdLine, signalLine)
+bool rsiCross50Down = ta.crossunder(rsi, 50)
+bool breakPivotLow = not na(lastPivotLow) and ta.crossunder(close, lastPivotLow)
+
+bool shortTrigger = macdCrossDown or rsiCross50Down or breakPivotLow
+
+// ============================================================================
+// CONFLUENCE SCORING
+// ============================================================================
+
+// Long confluence (0-7)
+calcLongScore() =>
+    int score = 0
+    
+    // +1 HTF trend aligned
+    if htfTrend == 1
+        score += 1
+    
+    // +1 MTF pullback or setup present
+    if mtfInPullback or mtfTrend == 1
+        score += 1
+    
+    // +1 BB squeeze
+    if isSqueeze
+        score += 1
+    
+    // +1 LTF trigger
+    if longTrigger
+        score += 1
+    
+    // +1 OBV confirms
+    if obvRising
+        score += 1
+    
+    // +1 RSI divergence supports
+    if bullishDiv
+        score += 1
+    
+    // +1 Price breaks pivot
+    if breakPivotHigh
+        score += 1
+    
+    score
+
+// Short confluence (0-7)
+calcShortScore() =>
+    int score = 0
+    
+    // +1 HTF trend aligned
+    if htfTrend == -1
+        score += 1
+    
+    // +1 MTF pullback or setup present
+    if mtfInPullback or mtfTrend == -1
+        score += 1
+    
+    // +1 BB squeeze
+    if isSqueeze
+        score += 1
+    
+    // +1 LTF trigger
+    if shortTrigger
+        score += 1
+    
+    // +1 OBV confirms
+    if not obvRising
+        score += 1
+    
+    // +1 RSI divergence supports
+    if bearishDiv
+        score += 1
+    
+    // +1 Price breaks pivot
+    if breakPivotLow
+        score += 1
+    
+    score
+
+int longScore = calcLongScore()
+int shortScore = calcShortScore()
+
+// Entry conditions - require both good score AND active trigger
+// This ensures we only enter on the bar when a trigger actually fires
+bool longSetup = longScore >= confluenceThreshold and (not enableHTFFilter or htfTrend == 1) and longTrigger
+bool shortSetup = shortScore >= confluenceThreshold and (not enableHTFFilter or htfTrend == -1) and shortTrigger
+
+// ============================================================================
+// POSITION SIZING (Fixed Fractional Risk)
+// ============================================================================
+
+calcPositionSize(float entryPrice, float stopPrice, float riskPercent) =>
+    if na(entryPrice) or na(stopPrice) or entryPrice == stopPrice
+        float(na)
+    else
+        riskCash = strategy.equity * (riskPercent / 100)
+        stopDist = math.abs(entryPrice - stopPrice)
+        qty = riskCash / stopDist
+        qty
+
+// ============================================================================
+// STRATEGY EXECUTION
+// ============================================================================
+
+// Only trade if no open position
+bool noPosition = strategy.position_size == 0
+
+// Track last entry bar to prevent multiple entries on same bar
+var int lastEntryBar = -1
+bool canEnter = noPosition and bar_index != lastEntryBar
+
+// Entry logic
+if canEnter and longSetup
+    // Calculate stops and targets
+    stopPrice = close - mtfAtr * stopMult
+    targetPrice = close + (close - stopPrice) * targetR
+    
+    // Calculate position size
+    qty = calcPositionSize(close, stopPrice, riskPct)
+    
+    if not na(qty) and qty > 0
+        strategy.entry("Long", strategy.long, qty=qty)
+        strategy.exit("Long Exit", "Long", stop=stopPrice, limit=targetPrice)
+        lastEntryBar := bar_index
+
+if canEnter and shortSetup
+    // Calculate stops and targets
+    stopPrice = close + mtfAtr * stopMult
+    targetPrice = close - (stopPrice - close) * targetR
+    
+    // Calculate position size
+    qty = calcPositionSize(close, stopPrice, riskPct)
+    
+    if not na(qty) and qty > 0
+        strategy.entry("Short", strategy.short, qty=qty)
+        strategy.exit("Short Exit", "Short", stop=stopPrice, limit=targetPrice)
+        lastEntryBar := bar_index
+
+// ============================================================================
+// VISUALIZATION
+// ============================================================================
+
+// Plot MAs
+plot(emaFast, "EMA Fast", color=color.new(color.blue, 0), linewidth=2)
+plot(smaLong, "SMA Long", color=color.new(color.orange, 0), linewidth=2)
+
+// Plot BBs
+p1 = plot(bbUpper, "BB Upper", color=color.new(color.gray, 70))
+p2 = plot(bbLower, "BB Lower", color=color.new(color.gray, 70))
+fill(p1, p2, color=color.new(color.gray, 90), title="BB Fill")
+
+// Plot pivots
+plotshape(pivotH, "Pivot High", shape.triangledown, location.abovebar, color.new(color.red, 50), size=size.tiny)
+plotshape(pivotL, "Pivot Low", shape.triangleup, location.belowbar, color.new(color.green, 50), size=size.tiny)
+
+// Highlight squeeze
+bgcolor(isSqueeze ? color.new(color.yellow, 90) : na, title="Squeeze BG")
+
+// Signal markers (show only when setup is valid)
+plotshape(longSetup and canEnter, "Long Signal", shape.labelup, location.belowbar, color.new(color.green, 0), text="LONG", textcolor=color.white, size=size.normal)
+plotshape(shortSetup and canEnter, "Short Signal", shape.labeldown, location.abovebar, color.new(color.red, 0), text="SHORT", textcolor=color.white, size=size.normal)
+
+// ============================================================================
+// MULTI-TICKER DASHBOARD
+// ============================================================================
+
+if showDashboard and barstate.islast
+    // Determine table position
+    var string dashPos = dashPosition == "top_right" ? position.top_right :
+                         dashPosition == "top_left" ? position.top_left :
+                         dashPosition == "bottom_right" ? position.bottom_right :
+                         position.bottom_left
+    
+    // Create table
+    var table dashboard = table.new(dashPos, 6, 7, border_width=1)
+    
+    // Header row
+    if barstate.isfirst or barstate.islast
+        table.cell(dashboard, 0, 0, "Symbol", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 1, 0, "HTF Trend", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 2, 0, "MTF Setup", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 3, 0, "Score", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 4, 0, "Long", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+        table.cell(dashboard, 5, 0, "Short", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+    
+    // Populate ticker rows
+    for i = 0 to 5
+        tickerSym = array.get(TICKERS, i)
+        
+        // Fetch data for each ticker
+        [tClose, tEma, tSma, tRsi, tAtr, tVolume, tVolSma] = request.security(
+            tickerSym,
+            timeframe.period,
+            [close, ta.ema(close, emaLen), ta.sma(close, smaLen), ta.rsi(close, rsiLen), ta.atr(atrLen), volume, ta.sma(volume, volSmaLen)],
+            lookahead=barmerge.lookahead_off
+        )
+        
+        [tHtfClose, tHtfEma, tHtfSma] = request.security(
+            tickerSym,
+            htfInput,
+            [close, ta.ema(close, emaLen), ta.sma(close, smaLen)],
+            lookahead=barmerge.lookahead_off
+        )
+        
+        [tMtfClose, tMtfEma] = request.security(
+            tickerSym,
+            mtfInput,
+            [close, ta.ema(close, emaLen)],
+            lookahead=barmerge.lookahead_off
+        )
+        
+        // Calculate trend and signals for ticker
+        tHtfTrend = calcTrend(tHtfClose, tHtfEma, tHtfSma)
+        tMtfInPullback = inPullbackZone(tMtfClose, tMtfEma, emaPullbackPct)
+        tVolMomentum = tVolume > tVolSma // Volume above average
+        
+        // Simplified scoring for dashboard
+        tLongScore = (tHtfTrend == 1 ? 1 : 0) + (tMtfInPullback ? 1 : 0) + (tVolMomentum and tClose > tEma ? 1 : 0) + (tRsi < 50 ? 1 : 0)
+        tShortScore = (tHtfTrend == -1 ? 1 : 0) + (tMtfInPullback ? 1 : 0) + (tVolMomentum and tClose < tEma ? 1 : 0) + (tRsi > 50 ? 1 : 0)
+        
+        tLongSetup = tLongScore >= 2 and tHtfTrend == 1
+        tShortSetup = tShortScore >= 2 and tHtfTrend == -1
+        
+        // Populate row
+        int row = i + 1
+        
+        // Symbol name (shortened)
+        symName = str.replace(tickerSym, "NASDAQ:", "")
+        table.cell(dashboard, 0, row, symName, text_size=size.small)
+        
+        // HTF Trend
+        trendText = tHtfTrend == 1 ? "🟢 Bull" : tHtfTrend == -1 ? "🔴 Bear" : "⚪ Neutral"
+        trendColor = tHtfTrend == 1 ? color.new(color.green, 80) : tHtfTrend == -1 ? color.new(color.red, 80) : color.new(color.gray, 80)
+        table.cell(dashboard, 1, row, trendText, bgcolor=trendColor, text_size=size.small)
+        
+        // MTF Setup
+        setupText = tMtfInPullback ? "✓ Pullback" : "—"
+        table.cell(dashboard, 2, row, setupText, text_size=size.small)
+        
+        // Max score
+        maxScore = math.max(tLongScore, tShortScore)
+        table.cell(dashboard, 3, row, str.tostring(maxScore), text_size=size.small)
+        
+        // Long signal
+        longText = tLongSetup ? "✓" : "—"
+        longColor = tLongSetup ? color.new(color.green, 70) : na
+        table.cell(dashboard, 4, row, longText, bgcolor=longColor, text_size=size.small)
+        
+        // Short signal
+        shortText = tShortSetup ? "✓" : "—"
+        shortColor = tShortSetup ? color.new(color.red, 70) : na
+        table.cell(dashboard, 5, row, shortText, bgcolor=shortColor, text_size=size.small)
+
+// ============================================================================
+// SYMBOL MISMATCH WARNING
+// ============================================================================
+
+if not tradeChartOnly and selectedSymbol != ticker.standard(syminfo.tickerid)
+    label.new(bar_index, high, 
+              "⚠️ WARNING: Strategy executes on chart symbol (" + syminfo.ticker + "), not selected symbol!", 
+              color=color.new(color.orange, 0), 
+              textcolor=color.white, 
+              style=label.style_label_down,
+              size=size.normal)
+
+// ============================================================================
+// ALERTS (Using alert() for strategies)
+// ============================================================================
+
+if longSetup and canEnter
+    alert("Long setup detected on " + syminfo.ticker, alert.freq_once_per_bar)
+
+if shortSetup and canEnter
+    alert("Short setup detected on " + syminfo.ticker, alert.freq_once_per_bar)
+
+if isSqueeze and squeezeChanged
+    alert("Bollinger Band squeeze detected on " + syminfo.ticker + " - potential breakout imminent", alert.freq_once_per_bar)
+
+// ============================================================================
+// DISPLAY INFO
+// ============================================================================
+
+// Info table with current state
+if barstate.islast
+    var table infoTable = table.new(position.top_left, 2, 6, border_width=1)
+    
+    table.cell(infoTable, 0, 0, "HTF Trend", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(infoTable, 1, 0, htfTrend == 1 ? "🟢 Bull" : htfTrend == -1 ? "🔴 Bear" : "⚪ Neutral")
+    
+    table.cell(infoTable, 0, 1, "Long Score", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(infoTable, 1, 1, str.tostring(longScore) + "/7", 
+               bgcolor=longSetup ? color.new(color.green, 70) : na)
+    
+    table.cell(infoTable, 0, 2, "Short Score", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(infoTable, 1, 2, str.tostring(shortScore) + "/7",
+               bgcolor=shortSetup ? color.new(color.red, 70) : na)
+    
+    table.cell(infoTable, 0, 3, "Squeeze", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(infoTable, 1, 3, isSqueeze ? "✓ Active" : "—",
+               bgcolor=isSqueeze ? color.new(color.yellow, 70) : na)
+    
+    table.cell(infoTable, 0, 4, "OBV", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(infoTable, 1, 4, obvRising ? "↑ Rising" : "↓ Falling")
+    
+    table.cell(infoTable, 0, 5, "Position", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    posText = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "None"
+    posColor = strategy.position_size > 0 ? color.new(color.green, 70) : 
+               strategy.position_size < 0 ? color.new(color.red, 70) : na
+    table.cell(infoTable, 1, 5, posText, bgcolor=posColor)
