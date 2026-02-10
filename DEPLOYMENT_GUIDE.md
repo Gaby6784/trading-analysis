@@ -76,7 +76,7 @@ python3 telegram_bot.py
 
 3. **Choose name:** "My Trading Bot"
 
-4. **Choose username:** "my_trading_analysis_bot"
+4. **Choose username:** "trading_analysis_gabi_bot"
 
 5. **Copy the token:** `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`
 
