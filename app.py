@@ -23,7 +23,7 @@ CORS(app)
 db = Database()
 
 # Default tickers to analyze
-DEFAULT_TICKERS = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'TSLA', 'META']
+DEFAULT_TICKERS = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'TSLA', 'META', 'NFLX']
 
 
 @app.route('/')

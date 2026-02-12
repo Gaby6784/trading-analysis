@@ -19,7 +19,7 @@ class AnalysisScheduler:
     """Timezone-aware scheduler for running automated analysis"""
     
     def __init__(self, tickers: list = None):
-        self.tickers = tickers or ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'TSLA', 'META']
+        self.tickers = tickers or ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'TSLA', 'META', 'NFLX']
         self.db = Database()
         self.telegram = TelegramBot()
         self.eastern = pytz.timezone('US/Eastern')

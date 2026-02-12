@@ -17,7 +17,7 @@ app = Flask(__name__)
 # Initialize
 db = Database()
 telegram = TelegramBot()
-DEFAULT_TICKERS = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'TSLA', 'META']
+DEFAULT_TICKERS = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'NVDA', 'TSLA', 'META', 'NFLX']
 
 
 @app.route('/cron/analyze')
